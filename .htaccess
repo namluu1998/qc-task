@@ -1,0 +1,22 @@
+# ==== Bảo mật cho hosting Apache/cPanel ====
+
+# Chặn truy cập trực tiếp các file/thư mục nhạy cảm
+<FilesMatch "^(config\.php|config\.example\.php)$">
+  Require all denied
+</FilesMatch>
+
+# Chặn truy cập trực tiếp lib, data (SQLite) và uploads (file tải lên)
+RedirectMatch 403 ^/?(lib|data|uploads)(/.*)?$
+
+# Không liệt kê thư mục
+Options -Indexes
+
+# Ép trang chủ về index.html
+DirectoryIndex index.html index.php
+
+# Header bảo mật cơ bản
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "SAMEORIGIN"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

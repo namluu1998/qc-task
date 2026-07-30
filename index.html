@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2d7ff9">
+<title>QC Task · Quản lý công việc</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<!-- ============ MÀN HÌNH ĐĂNG NHẬP ============ -->
+<div id="login-screen" class="login-screen hidden">
+  <form id="login-form" class="login-card">
+    <div class="login-logo">✓</div>
+    <h1>QC Task</h1>
+    <p class="login-sub">Quản lý công việc kiểm thử</p>
+    <div id="login-error" class="alert error hidden"></div>
+    <label>Tên đăng nhập</label>
+    <input id="login-username" autocomplete="username" required>
+    <label>Mật khẩu</label>
+    <input id="login-password" type="password" autocomplete="current-password" required>
+    <button type="submit" class="btn primary block">Đăng nhập</button>
+  </form>
+</div>
+
+<!-- ============ ỨNG DỤNG CHÍNH ============ -->
+<div id="app" class="app hidden">
+  <header class="topbar">
+    <button id="nav-toggle" class="icon-btn" aria-label="Menu">☰</button>
+    <div class="brand"><span class="brand-mark">✓</span> QC Task</div>
+    <div class="spacer"></div>
+    <span id="reminder-bell" class="icon-btn bell" title="Nhắc nhở">🔔<span id="reminder-count" class="badge hidden">0</span></span>
+    <div class="user-chip">
+      <span id="user-name"></span>
+      <span id="user-role" class="role-tag"></span>
+    </div>
+    <button id="logout-btn" class="btn ghost">Đăng xuất</button>
+  </header>
+
+  <div class="layout">
+    <!-- Thanh bên: danh sách dự án + menu -->
+    <aside id="sidebar" class="sidebar">
+      <div class="side-section">
+        <div class="side-head">
+          <span>Dự án</span>
+          <button id="add-project-btn" class="icon-btn small" title="Thêm dự án">＋</button>
+        </div>
+        <ul id="project-list" class="project-list"></ul>
+      </div>
+      <nav class="side-menu">
+        <button id="menu-calendar" class="side-link">📅 Lịch</button>
+        <button id="menu-reminders" class="side-link">🔔 Nhắc nhở</button>
+        <button id="menu-users" class="side-link manager-only">👥 Người dùng</button>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <!-- Khung công việc của dự án -->
+      <section id="view-tasks" class="view">
+        <div class="view-head">
+          <div>
+            <h2 id="project-title">Chọn một dự án</h2>
+            <p id="project-desc" class="muted"></p>
+          </div>
+          <div class="view-actions">
+            <button id="docs-btn" class="btn ghost hidden">📎 Tài liệu</button>
+            <button id="edit-project-btn" class="btn ghost manager-only hidden">Sửa dự án</button>
+            <button id="add-task-btn" class="btn primary hidden">＋ Công việc</button>
+          </div>
+        </div>
+
+        <div id="task-toolbar" class="toolbar hidden">
+          <input id="task-search" class="input" placeholder="🔍 Tìm công việc...">
+          <select id="filter-status" class="input">
+            <option value="">Tất cả trạng thái</option>
+          </select>
+          <select id="sort-by" class="input">
+            <option value="manual">Sắp xếp: Thủ công</option>
+            <option value="priority">Ưu tiên</option>
+            <option value="due">Hạn chót</option>
+            <option value="status">Trạng thái</option>
+          </select>
+        </div>
+
+        <div id="task-list" class="task-list"></div>
+        <div id="task-empty" class="empty hidden">Chưa có công việc nào. Bấm "＋ Công việc" để thêm.</div>
+      </section>
+
+      <!-- Khung nhắc nhở -->
+      <section id="view-reminders" class="view hidden">
+        <div class="view-head"><h2>🔔 Nhắc nhở & việc đến hạn</h2></div>
+        <div id="reminder-list" class="task-list"></div>
+        <div id="reminder-empty" class="empty hidden">Không có việc nào cần nhắc. 🎉</div>
+      </section>
+
+      <!-- Khung lịch -->
+      <section id="view-calendar" class="view hidden">
+        <div class="view-head">
+          <h2 id="cal-label">Lịch công việc</h2>
+          <div class="cal-nav">
+            <button id="cal-today" class="btn ghost">Hôm nay</button>
+            <button id="cal-prev" class="btn ghost" aria-label="Tháng trước">‹</button>
+            <button id="cal-next" class="btn ghost" aria-label="Tháng sau">›</button>
+          </div>
+        </div>
+        <div class="cal-scroll"><div id="cal-grid" class="cal-grid"></div></div>
+      </section>
+
+      <!-- Khung người dùng -->
+      <section id="view-users" class="view hidden">
+        <div class="view-head">
+          <h2>👥 Quản lý người dùng</h2>
+          <button id="add-user-btn" class="btn primary">＋ Người dùng</button>
+        </div>
+        <div id="user-list" class="user-list"></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- ============ MODAL ============ -->
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal" id="modal"></div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

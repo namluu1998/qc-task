@@ -1,0 +1,12 @@
+# KHÔNG commit file cấu hình thật (chứa mật khẩu DB)
+config.php
+
+# Dữ liệu SQLite khi test cục bộ
+data/
+*.sqlite
+
+# File người dùng tải lên
+uploads/
+
+# PHP portable dùng để test
+php-portable/
