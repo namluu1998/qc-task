@@ -585,7 +585,7 @@ function openModal(title, bodyHtml, footHtml) {
   $('modal-backdrop').classList.remove('hidden');
   $('modal-x').addEventListener('click', closeModal);
 }
-function closeModal() { $('modal-backdrop').classList.add('hidden'); $('modal').innerHTML = ''; }
+function closeModal() { $('modal-backdrop').classList.add('hidden'); $('modal').innerHTML = ''; $('modal').classList.remove('wide'); }
 $('modal-backdrop').addEventListener('click', (e) => { if (e.target === $('modal-backdrop')) closeModal(); });
 
 /* ---------- Modal Công việc ---------- */
@@ -615,11 +615,30 @@ function openTaskModal(task, parentId = null) {
     </div>
     <label>Nhắc lúc</label>
     <input id="t-remind" type="datetime-local" value="${task && task.remind_at ? esc(task.remind_at.replace(' ','T').slice(0,16)) : ''}">
+    ${task ? `
+    <div class="task-collab" id="task-collab">
+      <div class="tc-tabs">
+        <button type="button" class="tc-tab active" data-tab="comments">💬 Bình luận</button>
+        <button type="button" class="tc-tab" data-tab="activity">📜 Hoạt động</button>
+        <button type="button" class="tc-tab" data-tab="files">📎 Tệp</button>
+      </div>
+      <div class="tc-pane" id="tc-comments"><div class="muted">Đang tải…</div></div>
+      <div class="tc-pane hidden" id="tc-activity"></div>
+      <div class="tc-pane hidden" id="tc-files"></div>
+    </div>` : ''}
   `, `
     <button class="btn ghost" id="t-cancel">Hủy</button>
     <button class="btn primary" id="t-save">Lưu</button>
   `);
   $('t-cancel').addEventListener('click', closeModal);
+  if (task) {
+    $('modal').classList.add('wide');
+    document.querySelectorAll('#task-collab .tc-tab').forEach((b) => b.addEventListener('click', () => {
+      document.querySelectorAll('#task-collab .tc-tab').forEach((x) => x.classList.toggle('active', x === b));
+      ['comments', 'activity', 'files'].forEach((k) => $('tc-' + k).classList.toggle('hidden', k !== b.dataset.tab));
+    }));
+    loadTaskFeed(task.id, task.project_id != null ? task.project_id : state.currentProjectId);
+  }
   $('t-save').addEventListener('click', async () => {
     const title = $('t-title').value.trim();
     if (!title) { toast('Nhập tên công việc.', true); return; }
@@ -639,6 +658,107 @@ function openTaskModal(task, parentId = null) {
   setTimeout(() => $('t-title').focus(), 50);
 }
 $('add-task-btn').addEventListener('click', () => openTaskModal(null));
+
+/* ---------- Chi tiết task: bình luận + hoạt động + tệp ---------- */
+async function loadTaskFeed(taskId, projectId) {
+  state._feed = { taskId, projectId };
+  try {
+    const d = await api('task_feed', { query: { task_id: taskId } });
+    renderComments(d.comments, d.me);
+    renderActivity(d.activity);
+    renderTaskFiles(d.attachments);
+    const ft = document.querySelector('#task-collab .tc-tab[data-tab="files"]');
+    if (ft) ft.textContent = `📎 Tệp (${d.attachments.length})`;
+  } catch (e) { toast(e.message, true); }
+}
+
+function renderComments(comments, me) {
+  const pane = $('tc-comments'); if (!pane) return;
+  const list = comments.length ? comments.map((c) => `
+    <div class="cmt">${avatarHtml(c.author)}
+      <div class="cmt-main">
+        <div class="cmt-head"><b>${esc(c.author || '—')}</b> <span class="muted" style="margin:0">${esc((c.created_at || '').slice(0, 16))}</span>
+          ${(me.role === 'manager' || me.id === c.user_id) ? `<button class="cmt-del" data-id="${c.id}" title="Xóa">✕</button>` : ''}</div>
+        <div class="cmt-body">${esc(c.body)}</div>
+      </div>
+    </div>`).join('') : '<div class="muted">Chưa có bình luận.</div>';
+  pane.innerHTML = `<div class="cmt-list">${list}</div>
+    <div class="cmt-compose">
+      <textarea id="cmt-input" rows="2" placeholder="Viết bình luận…"></textarea>
+      <button class="btn primary" id="cmt-send">Gửi</button>
+    </div>`;
+  $('cmt-send').addEventListener('click', addComment);
+  pane.querySelectorAll('.cmt-del').forEach((b) => b.addEventListener('click', () => delComment(+b.dataset.id)));
+}
+async function addComment() {
+  const input = $('cmt-input'); const text = input.value.trim();
+  if (!text) return;
+  try { await api('comment_add', { method: 'POST', body: { task_id: state._feed.taskId, body: text } }); loadTaskFeed(state._feed.taskId, state._feed.projectId); }
+  catch (e) { toast(e.message, true); }
+}
+async function delComment(id) {
+  if (!confirm('Xóa bình luận này?')) return;
+  try { await api('comment_delete', { method: 'POST', body: { id } }); loadTaskFeed(state._feed.taskId, state._feed.projectId); }
+  catch (e) { toast(e.message, true); }
+}
+
+function renderActivity(activity) {
+  const pane = $('tc-activity'); if (!pane) return;
+  pane.innerHTML = activity.length
+    ? `<div class="act-list">${activity.map((a) => `
+        <div class="act-item"><span class="act-dot"></span>
+          <div><b>${esc(a.author || '—')}</b> ${esc(a.action)} <span class="muted" style="margin:0">· ${esc((a.created_at || '').slice(0, 16))}</span></div>
+        </div>`).join('')}</div>`
+    : '<div class="muted">Chưa có hoạt động.</div>';
+}
+
+function renderTaskFiles(atts) {
+  const pane = $('tc-files'); if (!pane) return;
+  const list = atts.length ? atts.map((d) => {
+    const isFile = d.kind === 'file'; const href = isFile ? `api.php?action=doc_download&id=${d.id}` : d.url;
+    return `<div class="doc-item">
+      <span class="doc-ic">${isFile ? '📄' : '🔗'}</span>
+      <div class="doc-main"><a href="${esc(href)}" target="_blank" rel="noopener" class="doc-name">${esc(d.name)}</a>
+        <div class="doc-meta">${isFile ? fmtSize(d.size) : 'link'} · ${esc((d.created_at || '').slice(0, 10))}</div></div>
+      <button class="ta-btn tf-del" data-id="${d.id}" title="Xóa">🗑</button>
+    </div>`;
+  }).join('') : '<div class="muted">Chưa có tệp đính kèm.</div>';
+  pane.innerHTML = `
+    <div class="doc-upzone" id="tf-upzone"><input type="file" id="tf-file" hidden>
+      <div class="doc-up-inner"><div class="doc-up-ic">⬆️</div>Kéo thả ảnh/file hoặc <span class="doc-pick" id="tf-pick">bấm để chọn</span><div class="muted" style="margin-top:4px">Tối đa 50MB</div></div></div>
+    <div class="tf-linkrow"><input id="tf-linkurl" class="input" placeholder="Hoặc dán link (https://…)"><button class="btn" id="tf-addlink">＋ Link</button></div>
+    <div class="doc-list" style="margin-top:12px">${list}</div>`;
+  const up = $('tf-upzone'), fi = $('tf-file');
+  $('tf-pick').addEventListener('click', () => fi.click());
+  fi.addEventListener('change', () => { if (fi.files[0]) tfUpload(fi.files[0]); });
+  ['dragover', 'dragenter'].forEach((ev) => up.addEventListener(ev, (e) => { e.preventDefault(); up.classList.add('over'); }));
+  ['dragleave', 'dragend'].forEach((ev) => up.addEventListener(ev, () => up.classList.remove('over')));
+  up.addEventListener('drop', (e) => { e.preventDefault(); up.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) tfUpload(f); });
+  $('tf-addlink').addEventListener('click', tfAddLink);
+  pane.querySelectorAll('.tf-del').forEach((b) => b.addEventListener('click', () => tfDelete(+b.dataset.id)));
+}
+async function tfUpload(file) {
+  if (file.size > 52428800) { toast('File vượt quá 50MB.', true); return; }
+  const fd = new FormData();
+  fd.append('project_id', state._feed.projectId); fd.append('task_id', state._feed.taskId); fd.append('category', 'Tài liệu'); fd.append('file', file);
+  try {
+    const res = await fetch('api.php?action=doc_upload', { method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': state.csrf }, body: fd });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.error || 'Tải lên thất bại.');
+    toast('Đã đính kèm.'); loadTaskFeed(state._feed.taskId, state._feed.projectId);
+  } catch (e) { toast(e.message, true); }
+}
+async function tfAddLink() {
+  const url = $('tf-linkurl').value.trim();
+  if (!url) { toast('Nhập link.', true); return; }
+  try { await api('doc_link', { method: 'POST', body: { project_id: state._feed.projectId, task_id: state._feed.taskId, url, category: 'Tài liệu' } }); loadTaskFeed(state._feed.taskId, state._feed.projectId); }
+  catch (e) { toast(e.message, true); }
+}
+async function tfDelete(id) {
+  if (!confirm('Xóa tệp này?')) return;
+  try { await api('doc_delete', { method: 'POST', body: { id } }); loadTaskFeed(state._feed.taskId, state._feed.projectId); }
+  catch (e) { toast(e.message, true); }
+}
 
 /* ---------- Modal Dự án ---------- */
 function openProjectModal(project) {
@@ -941,6 +1061,7 @@ function renderDocsCenter() {
       <select id="dc-fproject" class="input"><option value="">Tất cả dự án</option>${projOpts}</select>
       <select id="dc-fcat" class="input"><option value="">Tất cả phân loại</option>${catOpts}</select>
       <select id="dc-fkind" class="input"><option value="">Tất cả loại</option><option value="file">File</option><option value="link">Link</option></select>
+      <select id="dc-fsort" class="input"><option value="new">Mới nhất</option><option value="name">Tên A→Z</option><option value="size">Dung lượng</option></select>
       <input id="dc-search" class="input" placeholder="🔍 Tìm theo tên…">
     </div>
     <div id="dc-list" class="doc-list"></div>`;
@@ -955,7 +1076,7 @@ function bindDocsCenter() {
   ['dragleave', 'dragend'].forEach((ev) => up.addEventListener(ev, () => up.classList.remove('over')));
   up.addEventListener('drop', (e) => { e.preventDefault(); up.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) dcUpload(f); });
   $('dc-addlink').addEventListener('click', dcAddLink);
-  ['dc-fproject', 'dc-fcat', 'dc-fkind'].forEach((id) => $(id).addEventListener('change', loadDocsCenter));
+  ['dc-fproject', 'dc-fcat', 'dc-fkind', 'dc-fsort'].forEach((id) => $(id).addEventListener('change', loadDocsCenter));
   $('dc-search').addEventListener('input', () => { clearTimeout(_dcTimer); _dcTimer = setTimeout(loadDocsCenter, 300); });
 }
 
@@ -965,6 +1086,7 @@ async function loadDocsCenter() {
     project_id: $('dc-fproject').value || 0,
     category: $('dc-fcat').value || '',
     kind: $('dc-fkind').value || '',
+    sort: $('dc-fsort').value || 'new',
     q: $('dc-search').value.trim() || '',
   };
   list.innerHTML = '<div class="muted" style="padding:14px 0">Đang tải…</div>';
@@ -972,23 +1094,68 @@ async function loadDocsCenter() {
     const d = await api('documents_all', { query });
     if (!d.documents.length) { list.innerHTML = '<div class="doc-empty">Không có tài liệu phù hợp.</div>'; return; }
     list.innerHTML = `<div class="muted" style="margin:2px 0 8px">${d.documents.length} tài liệu</div>` + d.documents.map(dcItem).join('');
+    _docsById = {}; d.documents.forEach((x) => { _docsById[x.id] = x; });
+    list.querySelectorAll('.doc-preview').forEach((el) => el.addEventListener('click', () => previewDoc(+el.dataset.id)));
+    list.querySelectorAll('.doc-edit').forEach((b) => b.addEventListener('click', () => openDocEdit(_docsById[+b.dataset.id])));
     list.querySelectorAll('.doc-del').forEach((b) => b.addEventListener('click', () => dcDelete(+b.dataset.id)));
   } catch (e) { toast(e.message, true); }
+}
+let _docsById = {};
+const VIEWABLE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'];
+function isViewable(doc) {
+  return doc.kind === 'file' && VIEWABLE_EXT.includes((doc.name.split('.').pop() || '').toLowerCase());
 }
 
 function dcItem(doc) {
   const isFile = doc.kind === 'file';
-  const href = isFile ? `api.php?action=doc_download&id=${doc.id}` : doc.url;
+  const viewable = isViewable(doc);
   const meta = [doc.uploader, doc.created_at ? doc.created_at.slice(0, 10) : '', isFile ? fmtSize(doc.size) : 'link'].filter(Boolean).join(' · ');
+  const nameEl = viewable
+    ? `<span class="doc-name doc-preview" data-id="${doc.id}" title="Xem trước">${esc(doc.name)}</span>`
+    : `<a href="${esc(isFile ? `api.php?action=doc_download&id=${doc.id}` : doc.url)}" target="_blank" rel="noopener" class="doc-name">${esc(doc.name)}</a>`;
   return `<div class="doc-item">
-    <span class="doc-ic">${isFile ? '📄' : '🔗'}</span>
+    <span class="doc-ic">${isFile ? (viewable ? '🖼️' : '📄') : '🔗'}</span>
     <div class="doc-main">
-      <a href="${esc(href)}" target="_blank" rel="noopener" class="doc-name">${esc(doc.name)}</a>
+      ${nameEl}
       <div class="doc-meta"><span class="proj-badge" style="background:${esc(doc.project_color)}22;color:${esc(doc.project_color)}">${esc(doc.project_name)}</span> ${esc(meta)}</div>
     </div>
     <span class="doc-cat">${esc(doc.category)}</span>
+    <button class="ta-btn doc-edit" data-id="${doc.id}" title="Sửa">✎</button>
     <button class="ta-btn doc-del" data-id="${doc.id}" title="Xóa">🗑</button>
   </div>`;
+}
+
+// Xem trước ảnh / PDF ngay trong app
+function previewDoc(id) {
+  const doc = _docsById[id]; if (!doc) return;
+  const ext = (doc.name.split('.').pop() || '').toLowerCase();
+  const url = `api.php?action=doc_download&id=${id}&disp=inline`;
+  const inner = ext === 'pdf'
+    ? `<iframe src="${url}" class="doc-preview-frame"></iframe>`
+    : `<img src="${url}" class="doc-preview-img" alt="${esc(doc.name)}">`;
+  openModal(doc.name, `<div class="doc-preview-wrap">${inner}</div>`,
+    `<a class="btn" href="api.php?action=doc_download&id=${id}" download>⬇ Tải về</a><button class="btn ghost" id="pv-close">Đóng</button>`);
+  $('modal').classList.add('wide');
+  $('pv-close').addEventListener('click', closeModal);
+}
+
+// Sửa tên / phân loại tài liệu
+function openDocEdit(doc) {
+  if (!doc) return;
+  const catOpts = DOC_CATS.map((c) => `<option ${c === doc.category ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  openModal('Sửa tài liệu', `
+    <label>Tên hiển thị</label>
+    <input id="de-name" value="${esc(doc.name)}">
+    <label>Phân loại</label>
+    <select id="de-cat">${catOpts}</select>
+  `, `<button class="btn ghost" id="de-cancel">Hủy</button><button class="btn primary" id="de-save">Lưu</button>`);
+  $('de-cancel').addEventListener('click', closeModal);
+  $('de-save').addEventListener('click', async () => {
+    const name = $('de-name').value.trim();
+    if (!name) { toast('Nhập tên tài liệu.', true); return; }
+    try { await api('doc_update', { method: 'POST', body: { id: doc.id, name, category: $('de-cat').value } }); closeModal(); loadDocsCenter(); toast('Đã lưu.'); }
+    catch (e) { toast(e.message, true); }
+  });
 }
 
 async function dcUpload(file) {
@@ -1020,6 +1187,46 @@ async function dcDelete(id) {
 }
 $('menu-docs').addEventListener('click', openDocsCenter);
 
+/* ---------- Việc của tôi (xuyên dự án) ---------- */
+let _mineScope = 'assigned';
+async function openMine() { switchView('mine'); await loadMine(); }
+async function loadMine() {
+  const body = $('mine-body');
+  body.innerHTML = '<div class="muted" style="padding:16px 0">Đang tải…</div>';
+  document.querySelectorAll('#mine-toggle .seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.scope === _mineScope));
+  try { const d = await api('my_tasks', { query: { scope: _mineScope } }); renderMine(d.tasks); }
+  catch (e) { toast(e.message, true); }
+}
+function renderMine(tasks) {
+  const body = $('mine-body');
+  if (!tasks.length) { body.innerHTML = `<div class="doc-empty">Không có công việc ${_mineScope === 'created' ? 'bạn tạo' : 'được giao cho bạn'}.</div>`; return; }
+  const today = new Date().toISOString().slice(0, 10);
+  let html = '';
+  GROUP_ORDER.filter((s) => tasks.some((t) => t.status === s)).forEach((status) => {
+    const rows = tasks.filter((t) => t.status === status);
+    html += `<div class="rep-card" style="padding:12px 14px">
+      <div class="mine-group"><span class="tg-dot" style="background:${STATUS_DOT[status] || '#98a2b3'}"></span><span class="tg-name">${esc(status)}</span><span class="tg-count">${rows.length}</span></div>
+      ${rows.map((t) => mineRow(t, today)).join('')}</div>`;
+  });
+  body.innerHTML = html;
+  body.querySelectorAll('.mine-row').forEach((el) => el.addEventListener('click', () => openCalTask(+el.dataset.id, +el.dataset.proj)));
+}
+function mineRow(t, today) {
+  const done = t.status === DONE_STATUS;
+  const overdue = t.due_date && t.due_date < today && !done;
+  const pri = PRI_ICON[t.priority] || PRI_ICON['Trung bình'];
+  return `<div class="mine-row" data-id="${t.id}" data-proj="${t.project_id}">
+    <span class="pri-ind" style="color:${pri.c}" title="${esc(t.priority)}">${pri.icon}</span>
+    <div class="mine-main">
+      <div class="mine-title ${done ? 'done' : ''}">${esc(t.title)}</div>
+      <div class="mine-meta"><span class="proj-badge" style="background:${esc(t.project_color)}22;color:${esc(t.project_color)}">${esc(t.project_name)}</span>${t.due_date ? ` · 📅 ${esc(t.due_date.slice(5))}${overdue ? ' (quá hạn)' : ''}` : ''}</div>
+    </div>
+    <span class="mine-status" style="color:${STATUS_DOT[t.status] || 'var(--muted)'}">${esc(t.status)}</span>
+  </div>`;
+}
+$('menu-mine').addEventListener('click', openMine);
+document.querySelectorAll('#mine-toggle .seg-btn').forEach((b) => b.addEventListener('click', () => { _mineScope = b.dataset.scope; loadMine(); }));
+
 /* ---------- Báo cáo (có bộ lọc thời gian) ---------- */
 function reportRangeDates(preset) {
   const d = new Date(), y = d.getFullYear(), m = d.getMonth();
@@ -1027,6 +1234,14 @@ function reportRangeDates(preset) {
   const today = fmt(d);
   if (preset === 'today') return { from: today, to: today };
   if (preset === '7days') { const s = new Date(d); s.setDate(d.getDate() - 6); return { from: fmt(s), to: today }; }
+  if (preset === 'thisweek' || preset === 'lastweek') {
+    // Thứ 2 → Thứ 6 (t2–t6) của tuần này / tuần trước
+    const day = d.getDay(); // 0=CN..6=T7
+    const mon = new Date(d);
+    mon.setDate(d.getDate() + (day === 0 ? -6 : 1 - day) - (preset === 'lastweek' ? 7 : 0));
+    const fri = new Date(mon); fri.setDate(mon.getDate() + 4);
+    return { from: fmt(mon), to: fmt(fri) };
+  }
   if (preset === 'month') return { from: fmt(new Date(y, m, 1)), to: today };
   if (preset === 'lastmonth') return { from: fmt(new Date(y, m - 1, 1)), to: fmt(new Date(y, m, 0)) };
   return { from: '', to: '' }; // all
@@ -1053,7 +1268,7 @@ async function loadReport() {
 
 function reportFilterBar() {
   const rr = state.reportRange;
-  const presets = [['today', 'Hôm nay'], ['7days', '7 ngày'], ['month', 'Tháng này'], ['lastmonth', 'Tháng trước'], ['all', 'Tất cả']];
+  const presets = [['today', 'Hôm nay'], ['thisweek', 'Tuần này'], ['lastweek', 'Tuần trước'], ['7days', '7 ngày'], ['month', 'Tháng này'], ['lastmonth', 'Tháng trước'], ['all', 'Tất cả']];
   return `<div class="rep-filter">
     <div class="rep-presets">
       ${presets.map(([k, l]) => `<button class="rep-preset ${rr.preset === k ? 'active' : ''}" data-preset="${k}">${l}</button>`).join('')}
@@ -1380,12 +1595,14 @@ function switchView(view) {
   $('view-report').classList.toggle('hidden', view !== 'report');
   $('view-settings').classList.toggle('hidden', view !== 'settings');
   $('view-docs').classList.toggle('hidden', view !== 'docs');
+  $('view-mine').classList.toggle('hidden', view !== 'mine');
   $('menu-reminders').classList.toggle('active', view === 'reminders');
   $('menu-users').classList.toggle('active', view === 'users');
   $('menu-calendar').classList.toggle('active', view === 'calendar');
   $('menu-report').classList.toggle('active', view === 'report');
   $('menu-settings').classList.toggle('active', view === 'settings');
   $('menu-docs').classList.toggle('active', view === 'docs');
+  $('menu-mine').classList.toggle('active', view === 'mine');
   closeSidebarMobile();
 }
 

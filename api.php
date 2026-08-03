@@ -45,7 +45,34 @@ function ensure_docs(): void
         created_at  VARCHAR(25)  NOT NULL
     )$suffix");
     db()->exec("CREATE INDEX IF NOT EXISTS idx_docs_project ON documents (project_id)");
+    try { db()->exec("ALTER TABLE documents ADD COLUMN task_id INTEGER DEFAULT NULL"); } catch (Throwable $e) {}
     $done = true;
+}
+
+/** Bảng bình luận + nhật ký hoạt động của task. */
+function ensure_collab(): void
+{
+    static $done = false;
+    if ($done) return;
+    ensure_docs();
+    $pk = is_sqlite() ? 'INTEGER PRIMARY KEY AUTOINCREMENT' : 'INT AUTO_INCREMENT PRIMARY KEY';
+    $suffix = is_sqlite() ? '' : ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4';
+    db()->exec("CREATE TABLE IF NOT EXISTS comments (
+        id $pk, task_id INTEGER NOT NULL, user_id INTEGER NOT NULL, body TEXT NOT NULL, created_at VARCHAR(25) NOT NULL
+    )$suffix");
+    db()->exec("CREATE INDEX IF NOT EXISTS idx_comments_task ON comments (task_id)");
+    db()->exec("CREATE TABLE IF NOT EXISTS activity (
+        id $pk, task_id INTEGER NOT NULL, user_id INTEGER, action TEXT NOT NULL, created_at VARCHAR(25) NOT NULL
+    )$suffix");
+    db()->exec("CREATE INDEX IF NOT EXISTS idx_activity_task ON activity (task_id)");
+    $done = true;
+}
+
+function log_activity(int $taskId, ?int $uid, string $action): void
+{
+    ensure_collab();
+    db()->prepare('INSERT INTO activity (task_id, user_id, action, created_at) VALUES (?,?,?,?)')
+        ->execute([$taskId, $uid, $action, date('Y-m-d H:i:s')]);
 }
 
 function uploads_dir(): string
@@ -319,7 +346,7 @@ try {
             ensure_task_columns();
             if ($id > 0) {
                 // Đảm bảo task thuộc đúng dự án người dùng có quyền.
-                $chk = db()->prepare('SELECT project_id, status, completed_at FROM tasks WHERE id=?');
+                $chk = db()->prepare('SELECT project_id, status, completed_at, assignee_id FROM tasks WHERE id=?');
                 $chk->execute([$id]);
                 $cur = $chk->fetch();
                 if (!$cur || (int)$cur['project_id'] !== $pid) {
@@ -335,6 +362,8 @@ try {
                     'UPDATE tasks SET title=?, description=?, priority=?, status=?, assignee_id=?, start_date=?, due_date=?, remind_at=?, updated_at=?, completed_at=? WHERE id=?'
                 );
                 $stmt->execute([$title, $desc, $priority, $status, $assignee, $start, $due, $remind, $now(), $completed, $id]);
+                if ($cur['status'] !== $status) log_activity($id, (int)$u['id'], 'đổi trạng thái sang "' . $status . '"');
+                if ((int)($cur['assignee_id'] ?? 0) !== (int)($assignee ?? 0)) log_activity($id, (int)$u['id'], 'thay đổi người thực hiện');
             } else {
                 $ord = db()->prepare('SELECT COALESCE(MAX(sort_order),0)+1 FROM tasks WHERE project_id=?');
                 $ord->execute([$pid]);
@@ -346,6 +375,7 @@ try {
                 );
                 $stmt->execute([$pid, $parent, $title, $desc, $priority, $status, $assignee, $start, $due, $remind, $sort, $u['id'], $now(), $now(), $completed]);
                 $id = (int)db()->lastInsertId();
+                log_activity($id, (int)$u['id'], 'đã tạo công việc');
             }
             json_out(['ok' => true, 'id' => $id]);
         }
@@ -368,6 +398,7 @@ try {
             $completed = $status === done_status() ? $now() : null;   // ghi mốc hoàn thành / xóa khi mở lại
             db()->prepare('UPDATE tasks SET status=?, updated_at=?, completed_at=? WHERE id=?')
                 ->execute([$status, $now(), $completed, $id]);
+            log_activity($id, (int)$u['id'], 'đổi trạng thái sang "' . $status . '"');
             json_out(['ok' => true]);
         }
 
@@ -380,7 +411,21 @@ try {
             if ($pid === false || !can_access_project($u, (int)$pid)) {
                 json_error('Không có quyền.', 403);
             }
+            ensure_collab();
+            // Gom id task + nhiệm vụ con để dọn dữ liệu liên quan
+            $subs = db()->prepare('SELECT id FROM tasks WHERE parent_id=?'); $subs->execute([$id]);
+            $ids = array_map('intval', $subs->fetchAll(PDO::FETCH_COLUMN)); $ids[] = $id;
+            $inIds = implode(',', $ids);
+            // Xóa file đính kèm của các task này (trên đĩa) + bản ghi
+            $af = db()->query("SELECT project_id, stored_name FROM documents WHERE kind='file' AND task_id IN ($inIds) AND stored_name IS NOT NULL");
+            foreach ($af->fetchAll() as $doc) {
+                $p = uploads_dir() . '/' . (int)$doc['project_id'] . '/' . basename((string)$doc['stored_name']);
+                if (is_file($p)) @unlink($p);
+            }
             db()->beginTransaction();
+            db()->exec("DELETE FROM documents WHERE task_id IN ($inIds)");
+            db()->exec("DELETE FROM comments WHERE task_id IN ($inIds)");
+            db()->exec("DELETE FROM activity WHERE task_id IN ($inIds)");
             db()->prepare('DELETE FROM tasks WHERE parent_id=?')->execute([$id]); // xóa nhiệm vụ con
             db()->prepare('DELETE FROM tasks WHERE id=?')->execute([$id]);
             db()->commit();
@@ -477,7 +522,7 @@ try {
                 'SELECT d.id, d.kind, d.category, d.name, d.url, d.size, d.created_at, d.uploaded_by,
                         us.full_name AS uploader
                  FROM documents d LEFT JOIN users us ON us.id = d.uploaded_by
-                 WHERE d.project_id = ? ORDER BY d.id DESC'
+                 WHERE d.project_id = ? AND d.task_id IS NULL ORDER BY d.id DESC'
             );
             $stmt->execute([$pid]);
             $rows = $stmt->fetchAll();
@@ -504,11 +549,12 @@ try {
             $stored = bin2hex(random_bytes(16)) . '.' . $ext;
             if (!move_uploaded_file($f['tmp_name'], $dir . '/' . $stored)) json_error('Không lưu được file.', 500);
             $category = trim($_POST['category'] ?? 'Tài liệu') ?: 'Tài liệu';
+            $taskId = !empty($_POST['task_id']) ? (int)$_POST['task_id'] : null;
             $stmt = db()->prepare(
-                'INSERT INTO documents (project_id, kind, category, name, stored_name, size, uploaded_by, created_at)
-                 VALUES (?,?,?,?,?,?,?,?)'
+                'INSERT INTO documents (project_id, kind, category, name, stored_name, size, uploaded_by, created_at, task_id)
+                 VALUES (?,?,?,?,?,?,?,?,?)'
             );
-            $stmt->execute([$pid, 'file', $category, $orig, $stored, (int)$f['size'], $u['id'], $now()]);
+            $stmt->execute([$pid, 'file', $category, $orig, $stored, (int)$f['size'], $u['id'], $now(), $taskId]);
             json_out(['ok' => true, 'id' => (int)db()->lastInsertId()]);
         }
 
@@ -522,11 +568,12 @@ try {
             if (!preg_match('~^https?://~i', $url)) json_error('Link phải bắt đầu bằng http:// hoặc https://');
             $name = trim($b['name'] ?? '') ?: $url;
             $category = trim($b['category'] ?? 'Tài liệu') ?: 'Tài liệu';
+            $taskId = !empty($b['task_id']) ? (int)$b['task_id'] : null;
             $stmt = db()->prepare(
-                'INSERT INTO documents (project_id, kind, category, name, url, uploaded_by, created_at)
-                 VALUES (?,?,?,?,?,?,?)'
+                'INSERT INTO documents (project_id, kind, category, name, url, uploaded_by, created_at, task_id)
+                 VALUES (?,?,?,?,?,?,?,?)'
             );
-            $stmt->execute([$pid, 'link', $category, $name, $url, $u['id'], $now()]);
+            $stmt->execute([$pid, 'link', $category, $name, $url, $u['id'], $now(), $taskId]);
             json_out(['ok' => true, 'id' => (int)db()->lastInsertId()]);
         }
 
@@ -541,8 +588,12 @@ try {
             if (!can_access_project($u, (int)$doc['project_id'])) json_error('Không có quyền.', 403);
             $path = uploads_dir() . '/' . (int)$doc['project_id'] . '/' . basename((string)$doc['stored_name']);
             if (!is_file($path)) json_error('File không tồn tại trên máy chủ.', 404);
-            header('Content-Type: application/octet-stream');
-            header('Content-Disposition: attachment; filename="' . rawurlencode($doc['name']) . '"');
+            // Xem trước inline chỉ cho ảnh + PDF (an toàn); còn lại luôn tải về
+            $ext = strtolower(pathinfo((string)$doc['stored_name'], PATHINFO_EXTENSION));
+            $viewMime = ['png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp', 'pdf' => 'application/pdf'];
+            $inline = (($_GET['disp'] ?? '') === 'inline') && isset($viewMime[$ext]);
+            header('Content-Type: ' . ($inline ? $viewMime[$ext] : 'application/octet-stream'));
+            header('Content-Disposition: ' . ($inline ? 'inline' : 'attachment') . '; filename="' . rawurlencode($doc['name']) . '"');
             header('Content-Length: ' . filesize($path));
             header('X-Content-Type-Options: nosniff');
             readfile($path);
@@ -569,6 +620,114 @@ try {
             json_out(['ok' => true]);
         }
 
+        case 'doc_update': {
+            $u = require_login();
+            ensure_docs();
+            $b = body();
+            $id = (int)($b['id'] ?? 0);
+            $name = trim($b['name'] ?? '');
+            if ($name === '') json_error('Tên tài liệu không được để trống.');
+            $category = trim($b['category'] ?? '') ?: 'Tài liệu';
+            $d = db()->prepare('SELECT project_id, uploaded_by FROM documents WHERE id = ?');
+            $d->execute([$id]);
+            $row = $d->fetch();
+            if (!$row) json_error('Không tìm thấy tài liệu.', 404);
+            if (!can_access_project($u, (int)$row['project_id'])) json_error('Không có quyền.', 403);
+            if ($u['role'] !== 'manager' && (int)$row['uploaded_by'] !== (int)$u['id']) json_error('Chỉ người đăng hoặc Quản lý mới được sửa.', 403);
+            db()->prepare('UPDATE documents SET name = ?, category = ? WHERE id = ?')->execute([$name, $category, $id]);
+            json_out(['ok' => true]);
+        }
+
+        // ------------------------------------------------ Chi tiết task: bình luận + hoạt động + đính kèm
+        case 'task_feed': {
+            $u = require_login();
+            ensure_collab();
+            $tid = (int)($_GET['task_id'] ?? 0);
+            $chk = db()->prepare('SELECT project_id FROM tasks WHERE id=?');
+            $chk->execute([$tid]);
+            $pid = $chk->fetchColumn();
+            if ($pid === false || !can_access_project($u, (int)$pid)) json_error('Không có quyền.', 403);
+
+            $cs = db()->prepare('SELECT c.id, c.body, c.created_at, c.user_id, us.full_name author
+                FROM comments c LEFT JOIN users us ON us.id = c.user_id WHERE c.task_id = ? ORDER BY c.id ASC');
+            $cs->execute([$tid]);
+            $comments = $cs->fetchAll();
+            foreach ($comments as &$c) { $c['id'] = (int)$c['id']; $c['user_id'] = (int)$c['user_id']; }
+            unset($c);
+
+            $as = db()->prepare('SELECT a.action, a.created_at, us.full_name author
+                FROM activity a LEFT JOIN users us ON us.id = a.user_id WHERE a.task_id = ? ORDER BY a.id DESC LIMIT 100');
+            $as->execute([$tid]);
+            $activity = $as->fetchAll();
+
+            $ds = db()->prepare("SELECT id, kind, name, url, size, created_at FROM documents WHERE task_id = ? ORDER BY id DESC");
+            $ds->execute([$tid]);
+            $atts = $ds->fetchAll();
+            foreach ($atts as &$d) { $d['id'] = (int)$d['id']; $d['size'] = (int)$d['size']; }
+            unset($d);
+
+            json_out(['ok' => true, 'comments' => $comments, 'activity' => $activity, 'attachments' => $atts,
+                'me' => ['id' => (int)$u['id'], 'role' => $u['role']]]);
+        }
+
+        case 'comment_add': {
+            $u = require_login();
+            ensure_collab();
+            $b = body();
+            $tid = (int)($b['task_id'] ?? 0);
+            $text = trim($b['body'] ?? '');
+            if ($text === '') json_error('Nội dung bình luận không được trống.');
+            $chk = db()->prepare('SELECT project_id FROM tasks WHERE id=?');
+            $chk->execute([$tid]);
+            $pid = $chk->fetchColumn();
+            if ($pid === false || !can_access_project($u, (int)$pid)) json_error('Không có quyền.', 403);
+            db()->prepare('INSERT INTO comments (task_id, user_id, body, created_at) VALUES (?,?,?,?)')
+                ->execute([$tid, $u['id'], $text, date('Y-m-d H:i:s')]);
+            json_out(['ok' => true, 'id' => (int)db()->lastInsertId()]);
+        }
+
+        case 'comment_delete': {
+            $u = require_login();
+            ensure_collab();
+            $id = (int)(body()['id'] ?? 0);
+            $c = db()->prepare('SELECT c.user_id, t.project_id FROM comments c JOIN tasks t ON t.id = c.task_id WHERE c.id = ?');
+            $c->execute([$id]);
+            $row = $c->fetch();
+            if (!$row) json_error('Không tìm thấy bình luận.', 404);
+            if (!can_access_project($u, (int)$row['project_id'])) json_error('Không có quyền.', 403);
+            if ($u['role'] !== 'manager' && (int)$row['user_id'] !== (int)$u['id']) json_error('Chỉ người viết hoặc Quản lý mới xóa được.', 403);
+            db()->prepare('DELETE FROM comments WHERE id=?')->execute([$id]);
+            json_out(['ok' => true]);
+        }
+
+        // ------------------------------------------------ Việc của tôi (xuyên dự án)
+        case 'my_tasks': {
+            $u = require_login();
+            ensure_task_columns();
+            $scope = ($_GET['scope'] ?? 'assigned') === 'created' ? 'created' : 'assigned';
+            if ($u['role'] === 'manager') {
+                $projIds = db()->query('SELECT id FROM projects')->fetchAll(PDO::FETCH_COLUMN);
+            } else {
+                $st = db()->prepare('SELECT project_id FROM project_members WHERE user_id = ?');
+                $st->execute([$u['id']]);
+                $projIds = $st->fetchAll(PDO::FETCH_COLUMN);
+            }
+            $projIds = array_values(array_unique(array_map('intval', $projIds)));
+            if (!$projIds) json_out(['ok' => true, 'tasks' => []]);
+            $in = implode(',', $projIds);
+            $col = $scope === 'created' ? 'created_by' : 'assignee_id';
+            $stmt = db()->prepare(
+                "SELECT t.id, t.title, t.status, t.priority, t.parent_id, t.start_date, t.due_date, t.project_id,
+                        p.name project_name, p.color project_color, a.full_name assignee_name
+                 FROM tasks t JOIN projects p ON p.id = t.project_id LEFT JOIN users a ON a.id = t.assignee_id
+                 WHERE t.project_id IN ($in) AND t.$col = ? ORDER BY t.id DESC"
+            );
+            $stmt->execute([$u['id']]);
+            $rows = $stmt->fetchAll();
+            foreach ($rows as &$r) { $r['id'] = (int)$r['id']; $r['project_id'] = (int)$r['project_id']; $r['parent_id'] = $r['parent_id'] !== null ? (int)$r['parent_id'] : null; }
+            json_out(['ok' => true, 'tasks' => $rows]);
+        }
+
         // ------------------------------------------------ Trung tâm tài liệu (mọi dự án)
         case 'documents_all': {
             $u = require_login();
@@ -583,7 +742,7 @@ try {
             $projIds = array_values(array_unique(array_map('intval', $projIds)));
             if (!$projIds) json_out(['ok' => true, 'documents' => []]);
             $in = implode(',', $projIds);
-            $where = "d.project_id IN ($in)"; $params = [];
+            $where = "d.project_id IN ($in) AND d.task_id IS NULL"; $params = [];
             $pid = (int)($_GET['project_id'] ?? 0);
             if ($pid) { $where .= ' AND d.project_id = ?'; $params[] = $pid; }
             $cat = trim($_GET['category'] ?? '');
@@ -592,11 +751,13 @@ try {
             if ($kind === 'file' || $kind === 'link') { $where .= ' AND d.kind = ?'; $params[] = $kind; }
             $qs = trim($_GET['q'] ?? '');
             if ($qs !== '') { $where .= ' AND d.name LIKE ?'; $params[] = '%' . $qs . '%'; }
+            $sortMap = ['new' => 'd.id DESC', 'name' => 'd.name ASC', 'size' => 'd.size DESC'];
+            $orderBy = $sortMap[$_GET['sort'] ?? 'new'] ?? 'd.id DESC';
             $stmt = db()->prepare(
                 "SELECT d.id, d.kind, d.category, d.name, d.url, d.size, d.created_at, d.project_id,
                         p.name project_name, p.color project_color, us.full_name uploader
                  FROM documents d JOIN projects p ON p.id = d.project_id LEFT JOIN users us ON us.id = d.uploaded_by
-                 WHERE $where ORDER BY d.id DESC LIMIT 500"
+                 WHERE $where ORDER BY $orderBy LIMIT 500"
             );
             $stmt->execute($params);
             $rows = $stmt->fetchAll();

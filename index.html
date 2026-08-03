@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#2d7ff9">
 <title>QC Task · Quản lý công việc</title>
 <script>try{var t=localStorage.getItem('qc-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
-<link rel="stylesheet" href="assets/style.css?v=20260730d">
+<link rel="stylesheet" href="assets/style.css?v=20260730g">
 </head>
 <body>
 
@@ -51,6 +51,7 @@
         <ul id="project-list" class="project-list"></ul>
       </div>
       <nav class="side-menu">
+        <button id="menu-mine" class="side-link">🙋 Việc của tôi</button>
         <button id="menu-calendar" class="side-link">📅 Lịch</button>
         <button id="menu-docs" class="side-link">📎 Tài liệu</button>
         <button id="menu-report" class="side-link">📊 Báo cáo</button>
@@ -103,6 +104,18 @@
         <div id="reminder-empty" class="empty hidden">Không có việc nào cần nhắc. 🎉</div>
       </section>
 
+      <!-- Khung "Việc của tôi" (xuyên dự án) -->
+      <section id="view-mine" class="view hidden">
+        <div class="view-head">
+          <h2>🙋 Việc của tôi</h2>
+          <div class="seg" id="mine-toggle">
+            <button class="seg-btn active" data-scope="assigned">Được giao</button>
+            <button class="seg-btn" data-scope="created">Tôi tạo</button>
+          </div>
+        </div>
+        <div id="mine-body" class="report-body"></div>
+      </section>
+
       <!-- Khung lịch -->
       <section id="view-calendar" class="view hidden">
         <div class="view-head">
@@ -153,6 +166,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="assets/app.js?v=20260730d"></script>
+<script src="assets/app.js?v=20260730g"></script>
 </body>
 </html>
