@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#2d7ff9">
 <title>QC Task · Quản lý công việc</title>
-<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem('qc-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
+<link rel="stylesheet" href="assets/style.css?v=20260730d">
 </head>
 <body>
 
@@ -30,12 +31,13 @@
     <button id="nav-toggle" class="icon-btn" aria-label="Menu">☰</button>
     <div class="brand"><span class="brand-mark">✓</span> QC Task</div>
     <div class="spacer"></div>
+    <button id="theme-toggle" class="icon-btn" title="Chuyển sáng / tối" aria-label="Chuyển sáng tối">🌙</button>
     <span id="reminder-bell" class="icon-btn bell" title="Nhắc nhở">🔔<span id="reminder-count" class="badge hidden">0</span></span>
     <div class="user-chip">
       <span id="user-name"></span>
       <span id="user-role" class="role-tag"></span>
     </div>
-    <button id="logout-btn" class="btn ghost">Đăng xuất</button>
+    <button id="logout-btn" class="btn ghost" title="Đăng xuất">Đăng xuất</button>
   </header>
 
   <div class="layout">
@@ -50,8 +52,11 @@
       </div>
       <nav class="side-menu">
         <button id="menu-calendar" class="side-link">📅 Lịch</button>
+        <button id="menu-docs" class="side-link">📎 Tài liệu</button>
+        <button id="menu-report" class="side-link">📊 Báo cáo</button>
         <button id="menu-reminders" class="side-link">🔔 Nhắc nhở</button>
         <button id="menu-users" class="side-link manager-only">👥 Người dùng</button>
+        <button id="menu-settings" class="side-link manager-only">⚙️ Cài đặt</button>
       </nav>
     </aside>
 
@@ -64,6 +69,10 @@
             <p id="project-desc" class="muted"></p>
           </div>
           <div class="view-actions">
+            <div class="seg hidden" id="task-view-toggle">
+              <button class="seg-btn active" data-mode="list">≣ Danh sách</button>
+              <button class="seg-btn" data-mode="kanban">▦ Kanban</button>
+            </div>
             <button id="docs-btn" class="btn ghost hidden">📎 Tài liệu</button>
             <button id="edit-project-btn" class="btn ghost manager-only hidden">Sửa dự án</button>
             <button id="add-task-btn" class="btn primary hidden">＋ Công việc</button>
@@ -107,6 +116,24 @@
         <div class="cal-scroll"><div id="cal-grid" class="cal-grid"></div></div>
       </section>
 
+      <!-- Khung quản lý tài liệu (mọi dự án) -->
+      <section id="view-docs" class="view hidden">
+        <div class="view-head"><h2>📎 Quản lý tài liệu</h2></div>
+        <div id="docs-center"></div>
+      </section>
+
+      <!-- Khung báo cáo -->
+      <section id="view-report" class="view hidden">
+        <div class="view-head"><h2>📊 Báo cáo công việc</h2></div>
+        <div id="report-body" class="report-body"></div>
+      </section>
+
+      <!-- Khung cài đặt -->
+      <section id="view-settings" class="view hidden">
+        <div class="view-head"><h2>⚙️ Cài đặt trạng thái</h2></div>
+        <div id="settings-body" class="report-body"></div>
+      </section>
+
       <!-- Khung người dùng -->
       <section id="view-users" class="view hidden">
         <div class="view-head">
@@ -126,6 +153,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="assets/app.js"></script>
+<script src="assets/app.js?v=20260730d"></script>
 </body>
 </html>

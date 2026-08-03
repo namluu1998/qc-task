@@ -10,7 +10,9 @@ const state = {
   currentProjectId: null, currentView: 'tasks',
   collapsedGroups: new Set(), collapsedParents: new Set(),
   calMonth: null,
+  taskViewMode: 'list',   // 'list' | 'kanban'
 };
+let kdragId = null;        // id thẻ đang kéo trên Kanban
 
 /* ---------- Bảng màu ---------- */
 const PRI_STYLE = {
@@ -20,10 +22,18 @@ const PRI_STYLE = {
   'Khẩn cấp':   { bg: '#fef2f2', c: '#b91c1c' },
 };
 const PRI_ORDER = { 'Khẩn cấp': 0, 'Cao': 1, 'Trung bình': 2, 'Thấp': 3 };
-const ST_COLOR = {
-  'Chưa test': '#64748b', 'Đang test': '#0369a1', 'Đạt': '#16a34a', 'Lỗi': '#ef4444', 'Chờ xử lý': '#f59e0b',
-};
-const ST_ORDER = { 'Lỗi': 0, 'Chờ xử lý': 1, 'Đang test': 2, 'Chưa test': 3, 'Đạt': 4 };
+
+// Trạng thái nạp động từ cấu hình (meta.statusDefs) — xem applyStatusDefs()
+let STATUS_DOT = {}, ST_COLOR = {}, ST_ORDER = {}, GROUP_ORDER = [];
+let DONE_STATUS = 'Đạt', FIRST_STATUS = 'Chưa test';
+function applyStatusDefs(defs) {
+  if (!defs || !defs.length) return;
+  STATUS_DOT = {}; ST_COLOR = {}; ST_ORDER = {}; GROUP_ORDER = [];
+  defs.forEach((d, i) => { STATUS_DOT[d.name] = d.color; ST_COLOR[d.name] = d.color; ST_ORDER[d.name] = i; GROUP_ORDER.push(d.name); });
+  const done = defs.find((d) => d.is_done);
+  DONE_STATUS = done ? done.name : defs[defs.length - 1].name;
+  FIRST_STATUS = defs[0].name;
+}
 
 /* ---------- Tiện ích ---------- */
 const $  = (id) => document.getElementById(id);
@@ -69,7 +79,7 @@ function showLogin() {
 function onLoggedIn(d) {
   state.user = d.user;
   state.csrf = d.csrf;
-  if (d.meta) state.meta = d.meta;
+  if (d.meta) { state.meta = d.meta; applyStatusDefs(d.meta.statusDefs); }
   $('login-screen').classList.add('hidden');
   $('app').classList.remove('hidden');
   $('user-name').textContent = d.user.full_name || d.user.username;
@@ -152,6 +162,7 @@ async function selectProject(id) {
   $('project-desc').textContent = p.description || '';
   $('add-task-btn').classList.remove('hidden');
   $('docs-btn').classList.remove('hidden');
+  $('task-view-toggle').classList.remove('hidden');
   $('edit-project-btn').classList.toggle('hidden', state.user.role !== 'manager');
   $('task-toolbar').classList.remove('hidden');
   closeSidebarMobile();
@@ -161,18 +172,109 @@ async function selectProject(id) {
 async function loadTasks() {
   const d = await api('tasks', { query: { project_id: state.currentProjectId } });
   state.tasks = d.tasks;
-  renderTasks();
+  renderCurrentTaskView();
+}
+
+// Chọn kiểu hiển thị công việc: Danh sách hoặc Kanban
+function renderCurrentTaskView() {
+  const kanban = state.taskViewMode === 'kanban';
+  $('filter-status').classList.toggle('hidden', kanban);   // Kanban đã nhóm sẵn theo cột
+  $('sort-by').classList.toggle('hidden', kanban);
+  document.querySelectorAll('#task-view-toggle .seg-btn').forEach((b) =>
+    b.classList.toggle('active', b.dataset.mode === state.taskViewMode));
+  kanban ? renderKanban() : renderTasks();
+}
+
+document.querySelectorAll('#task-view-toggle .seg-btn').forEach((b) =>
+  b.addEventListener('click', () => { state.taskViewMode = b.dataset.mode; renderCurrentTaskView(); }));
+
+/* ---------- Kanban ---------- */
+function renderKanban() {
+  const wrap = $('task-list');
+  const search = $('task-search').value.trim().toLowerCase();
+  const children = {};
+  state.tasks.forEach((t) => { if (t.parent_id) (children[t.parent_id] ??= []).push(t); });
+
+  let tops = state.tasks.filter((t) => !t.parent_id);
+  if (search) tops = tops.filter((t) =>
+    (t.title + ' ' + (t.description || '')).toLowerCase().includes(search) ||
+    (children[t.id] || []).some((c) => c.title.toLowerCase().includes(search)));
+
+  const groups = GROUP_ORDER.filter((s) => state.meta.statuses.includes(s));
+  let html = '<div class="kanban">';
+  groups.forEach((status) => {
+    const rows = tops.filter((t) => t.status === status).sort((a, b) => a.sort_order - b.sort_order);
+    html += `<div class="kcol">
+      <div class="kcol-head">
+        <span class="tg-dot" style="background:${STATUS_DOT[status]}"></span>
+        <span class="kcol-name">${esc(status)}</span>
+        <span class="tg-count">${rows.length}</span>
+      </div>
+      <div class="kcol-body" data-status="${esc(status)}">
+        ${rows.map((t) => kanbanCard(t, children[t.id] || [])).join('') || '<div class="kcol-empty">Chưa có task</div>'}
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  wrap.innerHTML = html;
+  $('task-empty').classList.add('hidden');
+  bindKanbanEvents();
+}
+
+function kanbanCard(t, kids) {
+  const done = t.status === DONE_STATUS;
+  const pri = PRI_ICON[t.priority] || PRI_ICON['Trung bình'];
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = t.due_date && t.due_date < today && !done;
+  const doneKids = kids.filter((k) => k.status === DONE_STATUS).length;
+  return `<div class="kcard ${done ? 'done' : ''}" draggable="true" data-id="${t.id}">
+    <div class="kcard-top">
+      <span class="pri-ind" style="color:${pri.c}" title="${esc(t.priority)}">${pri.icon}</span>
+      <span class="kcard-title">${esc(t.title)}</span>
+    </div>
+    <div class="kcard-meta">
+      ${avatarHtml(t.assignee_name)}
+      ${kids.length ? `<span class="subprog">${doneKids}/${kids.length}</span>` : ''}
+      ${t.due_date ? `<span class="due-pill ${overdue ? 'overdue' : ''}">📅 ${esc(t.due_date.slice(5))}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+function bindKanbanEvents() {
+  document.querySelectorAll('.kcard').forEach((c) => {
+    c.addEventListener('click', () => openTaskModal(state.tasks.find((t) => t.id === +c.dataset.id)));
+    c.addEventListener('dragstart', (e) => {
+      kdragId = +c.dataset.id; c.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', String(kdragId)); } catch (_) {}
+    });
+    c.addEventListener('dragend', () => {
+      document.querySelectorAll('.kcard.dragging').forEach((x) => x.classList.remove('dragging'));
+      document.querySelectorAll('.kcol-body.over').forEach((x) => x.classList.remove('over'));
+      kdragId = null;
+    });
+  });
+  document.querySelectorAll('.kcol-body').forEach((col) => {
+    col.addEventListener('dragover', (e) => { if (kdragId == null) return; e.preventDefault(); col.classList.add('over'); });
+    col.addEventListener('dragleave', () => col.classList.remove('over'));
+    col.addEventListener('drop', async (e) => {
+      if (kdragId == null) return;
+      e.preventDefault(); col.classList.remove('over');
+      const status = col.dataset.status, id = kdragId;
+      const t = state.tasks.find((x) => x.id === id);
+      if (t && t.status !== status) {
+        try { await api('task_status', { method: 'POST', body: { id, status } }); await loadTasks(); loadProjects(); refreshReminderCount(); }
+        catch (err) { toast(err.message, true); }
+      }
+    });
+  });
 }
 
 /* ---------- Hiển thị công việc (bảng nhóm theo trạng thái) ---------- */
-const STATUS_DOT = {
-  'Chưa test': '#98a2b3', 'Đang test': '#2563eb', 'Chờ xử lý': '#f5a623', 'Lỗi': '#e5484d', 'Đạt': '#12a150',
-};
 const PRI_ICON = {
   'Khẩn cấp': { icon: '⇈', c: '#e5484d' }, 'Cao': { icon: '↑', c: '#f76808' },
   'Trung bình': { icon: '—', c: '#98a2b3' }, 'Thấp': { icon: '↓', c: '#98a2b3' },
 };
-const GROUP_ORDER = ['Chưa test', 'Đang test', 'Chờ xử lý', 'Lỗi', 'Đạt'];
 let dragId = null;   // id việc đang kéo (kéo-thả sắp xếp)
 
 // Avatar chữ cái đầu, màu suy ra từ tên (ổn định).
@@ -249,12 +351,12 @@ function renderTasks() {
 }
 
 function taskRow(t, isSub, kids, manual) {
-  const done = t.status === 'Đạt';
+  const done = t.status === DONE_STATUS;
   const today = new Date().toISOString().slice(0, 10);
   const overdue = t.due_date && t.due_date < today && !done;
   const pri = PRI_ICON[t.priority] || PRI_ICON['Trung bình'];
   const hasKids = kids && kids.length;
-  const doneKids = hasKids ? kids.filter((k) => k.status === 'Đạt').length : 0;
+  const doneKids = hasKids ? kids.filter((k) => k.status === DONE_STATUS).length : 0;
   const expanded = hasKids && !state.collapsedParents.has(t.id);
   const canDrag = manual && !isSub;
   const stOpts = state.meta.statuses.map((s) =>
@@ -308,7 +410,7 @@ function bindTaskEvents() {
   document.querySelectorAll('.tcheck').forEach((b) =>
     b.addEventListener('click', async () => {
       const t = state.tasks.find((x) => x.id === +b.dataset.check);
-      const next = t.status === 'Đạt' ? 'Chưa test' : 'Đạt';
+      const next = t.status === DONE_STATUS ? FIRST_STATUS : DONE_STATUS;
       try { await api('task_status', { method: 'POST', body: { id: t.id, status: next } }); await reloadAll(); }
       catch (e) { toast(e.message, true); }
     }));
@@ -508,9 +610,11 @@ function openTaskModal(task, parentId = null) {
     <label>Người thực hiện</label>
     <select id="t-assignee">${userOpts}</select>
     <div class="form-row">
+      <div><label>Ngày bắt đầu</label><input id="t-start" type="date" value="${task && task.start_date ? esc(task.start_date.slice(0,10)) : ''}"></div>
       <div><label>Hạn chót</label><input id="t-due" type="date" value="${task && task.due_date ? esc(task.due_date.slice(0,10)) : ''}"></div>
-      <div><label>Nhắc lúc</label><input id="t-remind" type="datetime-local" value="${task && task.remind_at ? esc(task.remind_at.replace(' ','T').slice(0,16)) : ''}"></div>
     </div>
+    <label>Nhắc lúc</label>
+    <input id="t-remind" type="datetime-local" value="${task && task.remind_at ? esc(task.remind_at.replace(' ','T').slice(0,16)) : ''}">
   `, `
     <button class="btn ghost" id="t-cancel">Hủy</button>
     <button class="btn primary" id="t-save">Lưu</button>
@@ -527,7 +631,7 @@ function openTaskModal(task, parentId = null) {
       title, description: $('t-desc').value.trim(),
       priority: $('t-pri').value, status: $('t-status').value,
       assignee_id: $('t-assignee').value || null,
-      due_date: $('t-due').value || '', remind_at: remind,
+      start_date: $('t-start').value || '', due_date: $('t-due').value || '', remind_at: remind,
     };
     try { await api('task_save', { method: 'POST', body }); closeModal(); await loadTasks(); loadProjects(); refreshReminderCount(); toast('Đã lưu.'); }
     catch (e) { toast(e.message, true); }
@@ -666,7 +770,7 @@ async function renderCalendar() {
       <div class="cal-daynum">${cell.getDate()}</div>
       <div class="cal-items">`;
     items.slice(0, 4).forEach((t) => {
-      const done = t.status === 'Đạt';
+      const done = t.status === DONE_STATUS;
       const overdue = !done && ds < today;
       html += `<button class="cal-chip ${done ? 'done' : ''} ${overdue ? 'overdue' : ''}" data-id="${t.id}" data-proj="${t.project_id}" title="${esc(t.title)} · ${esc(t.project_name)}">
         <span class="cal-dot" style="background:${STATUS_DOT[t.status] || '#98a2b3'}"></span>
@@ -804,6 +908,399 @@ async function delDoc(pid, id) {
 
 $('docs-btn').addEventListener('click', () => { if (state.currentProjectId) openDocsModal(state.currentProjectId); });
 
+/* ---------- Trung tâm quản lý tài liệu (mọi dự án) ---------- */
+let _dcTimer = null;
+async function openDocsCenter() {
+  switchView('docs');
+  if (!state.projects.length) { try { const d = await api('projects'); state.projects = d.projects; } catch (e) {} }
+  renderDocsCenter();
+  loadDocsCenter();
+}
+
+function renderDocsCenter() {
+  const projOpts = state.projects.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const catOpts = DOC_CATS.map((c) => `<option>${esc(c)}</option>`).join('');
+  $('docs-center').innerHTML = `
+    <div class="rep-card">
+      <div class="rep-title">Thêm tài liệu</div>
+      <div class="dc-addbar">
+        <select id="dc-project" class="input">${projOpts || '<option value="">(chưa có dự án)</option>'}</select>
+        <select id="dc-cat" class="input">${catOpts}</select>
+      </div>
+      <div class="doc-upzone" id="dc-upzone">
+        <input type="file" id="dc-file" hidden>
+        <div class="doc-up-inner"><div class="doc-up-ic">⬆️</div>Kéo thả file vào đây hoặc <span class="doc-pick" id="dc-pick">bấm để chọn</span><div class="muted" style="margin-top:4px">Chọn dự án ở trên · tối đa 50MB</div></div>
+      </div>
+      <div class="doc-addrow" style="margin-bottom:0">
+        <input id="dc-linkurl" class="input" placeholder="Dán link tài liệu (https://…)">
+        <input id="dc-linkname" class="input" placeholder="Tên hiển thị (tùy chọn)">
+        <button class="btn primary" id="dc-addlink">＋ Link</button>
+      </div>
+    </div>
+    <div class="dc-filters">
+      <select id="dc-fproject" class="input"><option value="">Tất cả dự án</option>${projOpts}</select>
+      <select id="dc-fcat" class="input"><option value="">Tất cả phân loại</option>${catOpts}</select>
+      <select id="dc-fkind" class="input"><option value="">Tất cả loại</option><option value="file">File</option><option value="link">Link</option></select>
+      <input id="dc-search" class="input" placeholder="🔍 Tìm theo tên…">
+    </div>
+    <div id="dc-list" class="doc-list"></div>`;
+  bindDocsCenter();
+}
+
+function bindDocsCenter() {
+  const up = $('dc-upzone'), fileInput = $('dc-file');
+  $('dc-pick').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) dcUpload(fileInput.files[0]); });
+  ['dragover', 'dragenter'].forEach((ev) => up.addEventListener(ev, (e) => { e.preventDefault(); up.classList.add('over'); }));
+  ['dragleave', 'dragend'].forEach((ev) => up.addEventListener(ev, () => up.classList.remove('over')));
+  up.addEventListener('drop', (e) => { e.preventDefault(); up.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) dcUpload(f); });
+  $('dc-addlink').addEventListener('click', dcAddLink);
+  ['dc-fproject', 'dc-fcat', 'dc-fkind'].forEach((id) => $(id).addEventListener('change', loadDocsCenter));
+  $('dc-search').addEventListener('input', () => { clearTimeout(_dcTimer); _dcTimer = setTimeout(loadDocsCenter, 300); });
+}
+
+async function loadDocsCenter() {
+  const list = $('dc-list'); if (!list) return;
+  const query = {
+    project_id: $('dc-fproject').value || 0,
+    category: $('dc-fcat').value || '',
+    kind: $('dc-fkind').value || '',
+    q: $('dc-search').value.trim() || '',
+  };
+  list.innerHTML = '<div class="muted" style="padding:14px 0">Đang tải…</div>';
+  try {
+    const d = await api('documents_all', { query });
+    if (!d.documents.length) { list.innerHTML = '<div class="doc-empty">Không có tài liệu phù hợp.</div>'; return; }
+    list.innerHTML = `<div class="muted" style="margin:2px 0 8px">${d.documents.length} tài liệu</div>` + d.documents.map(dcItem).join('');
+    list.querySelectorAll('.doc-del').forEach((b) => b.addEventListener('click', () => dcDelete(+b.dataset.id)));
+  } catch (e) { toast(e.message, true); }
+}
+
+function dcItem(doc) {
+  const isFile = doc.kind === 'file';
+  const href = isFile ? `api.php?action=doc_download&id=${doc.id}` : doc.url;
+  const meta = [doc.uploader, doc.created_at ? doc.created_at.slice(0, 10) : '', isFile ? fmtSize(doc.size) : 'link'].filter(Boolean).join(' · ');
+  return `<div class="doc-item">
+    <span class="doc-ic">${isFile ? '📄' : '🔗'}</span>
+    <div class="doc-main">
+      <a href="${esc(href)}" target="_blank" rel="noopener" class="doc-name">${esc(doc.name)}</a>
+      <div class="doc-meta"><span class="proj-badge" style="background:${esc(doc.project_color)}22;color:${esc(doc.project_color)}">${esc(doc.project_name)}</span> ${esc(meta)}</div>
+    </div>
+    <span class="doc-cat">${esc(doc.category)}</span>
+    <button class="ta-btn doc-del" data-id="${doc.id}" title="Xóa">🗑</button>
+  </div>`;
+}
+
+async function dcUpload(file) {
+  const pid = $('dc-project').value;
+  if (!pid) { toast('Chọn dự án để tải lên.', true); return; }
+  if (file.size > 52428800) { toast('File vượt quá 50MB.', true); return; }
+  const fd = new FormData(); fd.append('project_id', pid); fd.append('category', $('dc-cat').value); fd.append('file', file);
+  try {
+    const res = await fetch('api.php?action=doc_upload', { method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': state.csrf }, body: fd });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.error || 'Tải lên thất bại.');
+    toast('Đã tải lên.'); loadDocsCenter(); loadProjects();
+  } catch (e) { toast(e.message, true); }
+}
+async function dcAddLink() {
+  const pid = $('dc-project').value, url = $('dc-linkurl').value.trim();
+  if (!pid) { toast('Chọn dự án.', true); return; }
+  if (!url) { toast('Nhập link tài liệu.', true); return; }
+  try {
+    await api('doc_link', { method: 'POST', body: { project_id: +pid, url, name: $('dc-linkname').value.trim(), category: $('dc-cat').value } });
+    $('dc-linkurl').value = ''; $('dc-linkname').value = '';
+    toast('Đã thêm link.'); loadDocsCenter();
+  } catch (e) { toast(e.message, true); }
+}
+async function dcDelete(id) {
+  if (!confirm('Xóa tài liệu này?')) return;
+  try { await api('doc_delete', { method: 'POST', body: { id } }); loadDocsCenter(); toast('Đã xóa.'); }
+  catch (e) { toast(e.message, true); }
+}
+$('menu-docs').addEventListener('click', openDocsCenter);
+
+/* ---------- Báo cáo (có bộ lọc thời gian) ---------- */
+function reportRangeDates(preset) {
+  const d = new Date(), y = d.getFullYear(), m = d.getMonth();
+  const fmt = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+  const today = fmt(d);
+  if (preset === 'today') return { from: today, to: today };
+  if (preset === '7days') { const s = new Date(d); s.setDate(d.getDate() - 6); return { from: fmt(s), to: today }; }
+  if (preset === 'month') return { from: fmt(new Date(y, m, 1)), to: today };
+  if (preset === 'lastmonth') return { from: fmt(new Date(y, m - 1, 1)), to: fmt(new Date(y, m, 0)) };
+  return { from: '', to: '' }; // all
+}
+
+async function openReport() {
+  switchView('report');
+  if (!state.reportRange) { state.reportRange = { preset: 'month', ...reportRangeDates('month') }; }
+  await loadReport();
+}
+
+async function loadReport() {
+  const body = $('report-body');
+  body.innerHTML = reportFilterBar() + '<div class="muted" style="padding:20px 0">Đang tải…</div>';
+  bindReportFilter();
+  const { from, to } = state.reportRange;
+  try {
+    const d = await api('report', { query: (from || to) ? { from, to } : {} });
+    body.innerHTML = reportFilterBar() + reportContent(d.report);
+    bindReportFilter();
+    bindReportDetail();
+  } catch (e) { toast(e.message, true); }
+}
+
+function reportFilterBar() {
+  const rr = state.reportRange;
+  const presets = [['today', 'Hôm nay'], ['7days', '7 ngày'], ['month', 'Tháng này'], ['lastmonth', 'Tháng trước'], ['all', 'Tất cả']];
+  return `<div class="rep-filter">
+    <div class="rep-presets">
+      ${presets.map(([k, l]) => `<button class="rep-preset ${rr.preset === k ? 'active' : ''}" data-preset="${k}">${l}</button>`).join('')}
+    </div>
+    <div class="rep-custom">
+      <input type="date" id="rep-from" class="input" value="${rr.from || ''}">
+      <span class="rep-arrow">→</span>
+      <input type="date" id="rep-to" class="input" value="${rr.to || ''}">
+      <button class="btn" id="rep-apply">Áp dụng</button>
+    </div>
+  </div>`;
+}
+
+function bindReportFilter() {
+  document.querySelectorAll('.rep-preset').forEach((b) =>
+    b.addEventListener('click', () => {
+      const p = b.dataset.preset;
+      state.reportRange = { preset: p, ...reportRangeDates(p) };
+      loadReport();
+    }));
+  const apply = $('rep-apply');
+  if (apply) apply.addEventListener('click', () => {
+    state.reportRange = { preset: 'custom', from: $('rep-from').value, to: $('rep-to').value };
+    loadReport();
+  });
+}
+
+function barRows(items, getLabel, getVal, color, dataFn) {
+  const max = Math.max(1, ...items.map(getVal));
+  return items.map((it) => {
+    const v = getVal(it);
+    const w = v <= 0 ? 0 : Math.max(4, Math.round(v / max * 100)); // 0 -> không hiện vệt màu
+    const data = dataFn ? dataFn(it) : '';
+    return `<div class="bar-row ${dataFn ? 'clickable' : ''}" ${data}>
+      <span class="bar-label">${getLabel(it)}</span>
+      <div class="bar"><div class="bar-fill" style="width:${w}%;background:${typeof color === 'function' ? color(it) : color}"></div></div>
+      <span class="bar-val">${v}</span>
+    </div>`;
+  }).join('');
+}
+
+function reportContent(r) {
+  const periodLabel = (r.from || r.to) ? `Kỳ: ${r.from || '…'} → ${r.to || '…'}` : 'Tất cả thời gian';
+  const tiles = [
+    { label: 'Tạo mới', val: r.created, c: 'var(--primary)', dtype: 'created' },
+    { label: 'Hoàn thành', val: r.completed, c: 'var(--ok)', dtype: 'completed' },
+    { label: 'Đang mở', val: r.openNow, c: 'var(--warn)', dtype: 'open' },
+    { label: 'Quá hạn', val: r.overdue, c: 'var(--danger)', dtype: 'overdue' },
+  ];
+  let html = `<div class="rep-period">${esc(periodLabel)} · <span class="muted" style="margin:0">Bấm số liệu / thanh để xem chi tiết công việc</span></div>`;
+  html += `<div class="stat-row">${tiles.map((t) => `
+    <div class="stat-tile clickable" data-dtype="${t.dtype}" data-dlabel="${esc(t.label)}"><div class="stat-val" style="color:${t.c}">${t.val}</div><div class="stat-label">${t.label}</div></div>`).join('')}</div>`;
+
+  // Biểu đồ hoàn thành theo ngày
+  const days = r.completedByDay || [];
+  const maxD = Math.max(1, ...days.map((x) => x.count));
+  html += `<div class="rep-card"><div class="rep-title">📈 Hoàn thành theo ngày</div>`;
+  if (days.length) {
+    html += `<div class="daychart">${days.map((x) => `
+      <div class="daycol" title="${x.date}: ${x.count} việc">
+        <div class="daybar-wrap"><div class="daybar" style="height:${Math.round(x.count / maxD * 100)}%"></div></div>
+        <div class="dayval">${x.count}</div>
+        <div class="daylbl">${x.date.slice(5)}</div>
+      </div>`).join('')}</div>`;
+  } else {
+    html += `<div class="muted">Chưa có công việc hoàn thành trong kỳ.</div>`;
+  }
+  html += `</div>`;
+
+  // Trạng thái hiện tại (snapshot)
+  const stOrder = GROUP_ORDER;
+  html += `<div class="rep-card"><div class="rep-title">Trạng thái hiện tại</div>`;
+  html += barRows(stOrder.map((s) => ({ s, v: r.byStatusNow[s] || 0 })),
+    (it) => `<span class="tg-dot" style="background:${STATUS_DOT[it.s]}"></span>${esc(it.s)}`,
+    (it) => it.v, (it) => STATUS_DOT[it.s],
+    (it) => `data-dtype="status" data-dkey="${esc(it.s)}" data-dlabel="Trạng thái: ${esc(it.s)}"`);
+  html += `</div>`;
+
+  // Hoàn thành theo dự án (trong kỳ)
+  if (r.completedByProject.length) {
+    html += `<div class="rep-card"><div class="rep-title">Hoàn thành theo dự án</div>`;
+    html += barRows(r.completedByProject,
+      (p) => `<span class="tg-dot" style="background:${esc(p.color)}"></span>${esc(p.name)}`,
+      (p) => p.count, 'var(--ok)',
+      (p) => `data-dtype="project_completed" data-dkey="${esc(p.name)}" data-dlabel="Hoàn thành · ${esc(p.name)}"`);
+    html += `</div>`;
+  }
+
+  // Hoàn thành theo người (trong kỳ)
+  if (r.completedByAssignee.length) {
+    html += `<div class="rep-card"><div class="rep-title">Hoàn thành theo người thực hiện</div>`;
+    html += barRows(r.completedByAssignee,
+      (a) => `${avatarHtml(a.name)} ${esc(a.name || '—')}`,
+      (a) => a.count, 'var(--primary)',
+      (a) => `data-dtype="assignee_completed" data-dkey="${esc(a.name || '')}" data-dlabel="Hoàn thành · ${esc(a.name || '—')}"`);
+    html += `</div>`;
+  }
+
+  // Đã hoàn thành gần đây
+  html += `<div class="rep-card"><div class="rep-title">✅ Đã hoàn thành gần đây</div>`;
+  if (r.recentDone.length) {
+    html += r.recentDone.map((t) => `<div class="done-item clickable" data-id="${t.id}" data-proj="${t.project_id}">
+      <span class="done-ic">✓</span>
+      <div class="done-main"><div class="done-title">${esc(t.title)}</div>
+        <div class="done-meta">${esc(t.project_name)}${t.assignee ? ' · ' + esc(t.assignee) : ''} · ${esc((t.completed_at || '').slice(0, 10))}</div></div>
+    </div>`).join('');
+  } else {
+    html += `<div class="muted">Chưa có công việc nào hoàn thành trong kỳ.</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+// Bấm số liệu / thanh trong báo cáo -> hiện danh sách task chi tiết (theo kỳ)
+function bindReportDetail() {
+  document.querySelectorAll('.stat-tile.clickable').forEach((el) =>
+    el.addEventListener('click', () => openReportDetail(el.dataset.dtype, '', el.dataset.dlabel)));
+  document.querySelectorAll('.bar-row.clickable').forEach((el) =>
+    el.addEventListener('click', () => openReportDetail(el.dataset.dtype, el.dataset.dkey || '', el.dataset.dlabel)));
+  document.querySelectorAll('.done-item.clickable').forEach((el) =>
+    el.addEventListener('click', () => { closeModal(); openCalTask(+el.dataset.id, +el.dataset.proj); }));
+}
+
+async function openReportDetail(type, key, label) {
+  const { from, to } = state.reportRange || {};
+  const query = { type };
+  if (key) query.key = key;
+  if (from) query.from = from;
+  if (to) query.to = to;
+  openModal(label || 'Chi tiết công việc', '<div class="muted">Đang tải…</div>', '<button class="btn ghost" id="rd-close">Đóng</button>');
+  $('rd-close').addEventListener('click', closeModal);
+  try {
+    const d = await api('report_detail', { query });
+    const body = $('modal').querySelector('.modal-body');
+    if (!body) return;
+    const periodTxt = (from || to) ? `${from || '…'} → ${to || '…'}` : 'Tất cả thời gian';
+    if (!d.tasks.length) {
+      body.innerHTML = `<div class="muted" style="margin-bottom:8px">Kỳ: ${esc(periodTxt)}</div><div class="doc-empty">Không có công việc nào.</div>`;
+      return;
+    }
+    body.innerHTML = `<div class="muted" style="margin:0 0 10px">${d.tasks.length} công việc · ${esc(periodTxt)}</div>
+      <div class="rd-list">${d.tasks.map(rdItem).join('')}</div>`;
+    body.querySelectorAll('.rd-item').forEach((el) =>
+      el.addEventListener('click', () => { const id = +el.dataset.id, pj = +el.dataset.proj; closeModal(); openCalTask(id, pj); }));
+  } catch (e) { toast(e.message, true); closeModal(); }
+}
+
+function rdItem(t) {
+  const done = t.status === DONE_STATUS;
+  const when = t.completed_at ? '✓ ' + t.completed_at.slice(0, 10)
+    : (t.due_date ? '📅 ' + t.due_date.slice(0, 10) : '');
+  return `<div class="rd-item" data-id="${t.id}" data-proj="${t.project_id}">
+    <span class="tg-dot" style="background:${STATUS_DOT[t.status] || '#98a2b3'}"></span>
+    <div class="rd-main">
+      <div class="rd-title ${done ? 'done' : ''}">${esc(t.title)}</div>
+      <div class="rd-meta">${esc(t.project_name)}${t.assignee ? ' · ' + esc(t.assignee) : ''}${when ? ' · ' + esc(when) : ''}</div>
+    </div>
+    <span class="rd-status" style="color:${STATUS_DOT[t.status] || 'var(--muted)'}">${esc(t.status)}</span>
+  </div>`;
+}
+$('menu-report').addEventListener('click', openReport);
+
+/* ---------- Cài đặt trạng thái (Quản lý) ---------- */
+function applyAndRefresh(defs) {
+  if (!defs) return;
+  state.meta.statusDefs = defs;
+  state.meta.statuses = defs.map((d) => d.name);
+  applyStatusDefs(defs);
+  // cập nhật lại bộ lọc trạng thái trong thanh công cụ
+  const fs = $('filter-status');
+  if (fs) fs.innerHTML = '<option value="">Tất cả trạng thái</option>' +
+    state.meta.statuses.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+}
+
+function openSettings() { switchView('settings'); renderStatusSettings(); }
+
+function renderStatusSettings() {
+  const defs = state.meta.statusDefs || [];
+  $('settings-body').innerHTML = `
+    <div class="rep-card">
+      <div class="rep-title">Danh sách trạng thái công việc</div>
+      <p class="muted" style="margin:0 0 14px">Đổi màu / đổi tên (tự cập nhật công việc đang dùng), sắp xếp bằng ▲▼. Chọn <b>Hoàn thành</b> cho trạng thái đánh dấu việc đã xong (dùng cho ô tick, đếm, báo cáo).</p>
+      <div class="st-settings">${defs.map((d, i) => statusSettingRow(d, i, defs.length)).join('')}</div>
+      <div class="st-add">
+        <input type="color" id="st-new-color" value="#2563eb">
+        <input class="input" id="st-new-name" placeholder="Tên trạng thái mới…">
+        <button class="btn primary" id="st-add-btn">＋ Thêm</button>
+      </div>
+    </div>`;
+  bindStatusSettings();
+}
+
+function statusSettingRow(d, i, total) {
+  return `<div class="st-row" data-id="${d.id}">
+    <input type="color" class="st-color" value="${esc(d.color)}" title="Màu">
+    <input class="input st-name" value="${esc(d.name)}" data-old="${esc(d.name)}">
+    <label class="st-done"><input type="radio" name="st-done" ${d.is_done ? 'checked' : ''}> Hoàn thành</label>
+    <span class="st-reorder">
+      <button class="btn tiny st-up" ${i === 0 ? 'disabled' : ''}>▲</button>
+      <button class="btn tiny st-down" ${i === total - 1 ? 'disabled' : ''}>▼</button>
+    </span>
+    <button class="btn tiny danger st-del" ${d.is_done ? 'disabled' : ''} title="${d.is_done ? 'Không thể xóa trạng thái Hoàn thành' : 'Xóa'}">Xóa</button>
+  </div>`;
+}
+
+function bindStatusSettings() {
+  const defs = state.meta.statusDefs || [];
+  const rowId = (el) => +el.closest('.st-row').dataset.id;
+  const saveRow = async (row) => {
+    const body = {
+      id: +row.dataset.id,
+      name: row.querySelector('.st-name').value.trim(),
+      color: row.querySelector('.st-color').value,
+      is_done: row.querySelector('.st-done input').checked ? 1 : 0,
+    };
+    if (!body.name) { toast('Tên trạng thái không được trống.', true); return; }
+    try { const d = await api('status_save', { method: 'POST', body }); applyAndRefresh(d.statusDefs); renderStatusSettings(); toast('Đã lưu.'); }
+    catch (e) { toast(e.message, true); renderStatusSettings(); }
+  };
+  document.querySelectorAll('.st-color').forEach((c) => c.addEventListener('change', () => saveRow(c.closest('.st-row'))));
+  document.querySelectorAll('.st-name').forEach((n) => n.addEventListener('change', () => { if (n.value.trim() !== n.dataset.old) saveRow(n.closest('.st-row')); }));
+  document.querySelectorAll('.st-done input').forEach((r) => r.addEventListener('change', () => saveRow(r.closest('.st-row'))));
+  document.querySelectorAll('.st-del').forEach((b) => b.addEventListener('click', async () => {
+    if (b.disabled) return;
+    if (!confirm('Xóa trạng thái này? Công việc đang dùng sẽ được chuyển sang trạng thái đầu tiên.')) return;
+    try { const d = await api('status_delete', { method: 'POST', body: { id: rowId(b) } }); applyAndRefresh(d.statusDefs); renderStatusSettings(); toast('Đã xóa' + (d.reassignedTo ? ` · việc dời sang "${d.reassignedTo}"` : '') + '.'); }
+    catch (e) { toast(e.message, true); }
+  }));
+  const reorder = async (b, dir) => {
+    const ids = defs.map((d) => d.id);
+    const i = ids.indexOf(rowId(b)), j = i + dir;
+    if (j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    try { const d = await api('status_reorder', { method: 'POST', body: { ordered_ids: ids } }); applyAndRefresh(d.statusDefs); renderStatusSettings(); }
+    catch (e) { toast(e.message, true); }
+  };
+  document.querySelectorAll('.st-up').forEach((b) => b.addEventListener('click', () => reorder(b, -1)));
+  document.querySelectorAll('.st-down').forEach((b) => b.addEventListener('click', () => reorder(b, 1)));
+  $('st-add-btn').addEventListener('click', async () => {
+    const name = $('st-new-name').value.trim();
+    if (!name) { toast('Nhập tên trạng thái.', true); return; }
+    try { const d = await api('status_save', { method: 'POST', body: { id: 0, name, color: $('st-new-color').value, is_done: 0 } }); applyAndRefresh(d.statusDefs); renderStatusSettings(); toast('Đã thêm trạng thái.'); }
+    catch (e) { toast(e.message, true); }
+  });
+}
+$('menu-settings').addEventListener('click', openSettings);
+
 /* ---------- Người dùng (Quản lý) ---------- */
 async function loadUsers() {
   try { const d = await api('users'); state.users = d.users; } catch (e) {}
@@ -880,15 +1377,36 @@ function switchView(view) {
   $('view-reminders').classList.toggle('hidden', view !== 'reminders');
   $('view-users').classList.toggle('hidden', view !== 'users');
   $('view-calendar').classList.toggle('hidden', view !== 'calendar');
+  $('view-report').classList.toggle('hidden', view !== 'report');
+  $('view-settings').classList.toggle('hidden', view !== 'settings');
+  $('view-docs').classList.toggle('hidden', view !== 'docs');
   $('menu-reminders').classList.toggle('active', view === 'reminders');
   $('menu-users').classList.toggle('active', view === 'users');
   $('menu-calendar').classList.toggle('active', view === 'calendar');
+  $('menu-report').classList.toggle('active', view === 'report');
+  $('menu-settings').classList.toggle('active', view === 'settings');
+  $('menu-docs').classList.toggle('active', view === 'docs');
   closeSidebarMobile();
 }
 
 /* ---------- Menu điện thoại ---------- */
 $('nav-toggle').addEventListener('click', () => $('sidebar').classList.toggle('open'));
 function closeSidebarMobile() { if (window.innerWidth <= 760) $('sidebar').classList.remove('open'); }
+
+/* ---------- Sáng / Tối ---------- */
+function currentTheme() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr) return attr;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+function setThemeIcon() { $('theme-toggle').textContent = currentTheme() === 'dark' ? '☀️' : '🌙'; }
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem('qc-theme', theme); } catch (e) {}
+  setThemeIcon();
+}
+$('theme-toggle').addEventListener('click', () => applyTheme(currentTheme() === 'dark' ? 'light' : 'dark'));
+setThemeIcon();
 
 /* ---------- Chạy ---------- */
 boot();
