@@ -294,6 +294,7 @@ function tableHeader() {
     <div class="tc-due">Hạn</div>
     <div class="tc-status">Trạng thái</div>
     <div class="tc-pri">Mức độ</div>
+    <div class="tc-act">Hành động</div>
   </div>`;
 }
 
@@ -338,7 +339,7 @@ function renderTasks() {
         const kids = children[t.id] || [];
         html += taskRow(t, false, kids, manual);
         if (kids.length && !state.collapsedParents.has(t.id)) {
-          kids.forEach((c) => { html += taskRow(c, true, [], false); });
+          kids.forEach((c) => { html += taskRow(c, true, [], manual); });
         }
       });
     }
@@ -363,38 +364,31 @@ function taskRow(t, isSub, kids, manual) {
     `<option value="${esc(s)}" ${s === t.status ? 'selected' : ''}>${esc(s)}</option>`).join('');
 
   const caret = !isSub && hasKids
-    ? `<button class="tw-caret ${expanded ? 'open' : ''}" data-exp="${t.id}" title="Nhiệm vụ con">▸</button>`
+    ? `<button class="tw-caret ${expanded ? 'open' : ''}" data-exp="${t.id}" title="Hiện/ẩn nhiệm vụ con">▸</button>`
     : `<span class="caret-spacer"></span>`;
 
-  const moveBtns = canDrag
-    ? `<button class="ta-btn move-up" data-id="${t.id}" title="Lên">▲</button>
-       <button class="ta-btn move-down" data-id="${t.id}" title="Xuống">▼</button>`
-    : '';
-  const actions = isSub
-    ? `<button class="ta-btn edit-task" data-id="${t.id}" title="Sửa">✎</button>
-       <button class="ta-btn del-task" data-id="${t.id}" title="Xóa">🗑</button>`
-    : `${moveBtns}
-       <button class="ta-btn add-sub" data-id="${t.id}" title="Thêm nhiệm vụ con">＋</button>
-       <button class="ta-btn edit-task" data-id="${t.id}" title="Sửa">✎</button>
-       <button class="ta-btn del-task" data-id="${t.id}" title="Xóa">🗑</button>`;
+  const actions = `
+    ${manual ? `<span class="drag-grip" draggable="true" data-id="${t.id}" title="Kéo để sắp xếp">⠿</span>` : ''}
+    ${!isSub ? `<button class="ta-btn add-sub" data-id="${t.id}" title="Thêm nhiệm vụ con">＋</button>` : ''}
+    <button class="ta-btn edit-task" data-id="${t.id}" title="Sửa">✎</button>
+    <button class="ta-btn del-task" data-id="${t.id}" title="Xóa">🗑</button>`;
 
   return `
-  <div class="trow ${isSub ? 'sub' : ''} ${done ? 'done' : ''}" data-id="${t.id}">
+  <div class="trow ${isSub ? 'sub' : ''} ${done ? 'done' : ''}" data-id="${t.id}" data-parent="${t.parent_id || 0}">
     <div class="tc-check">
-      ${canDrag ? `<span class="drag-grip" draggable="true" data-id="${t.id}" title="Kéo để sắp xếp">⠿</span>` : ''}
       ${caret}
-      <button class="tcheck ${done ? 'checked' : ''}" data-check="${t.id}" title="Đánh dấu Đạt / bỏ đánh dấu"></button>
+      <button class="tcheck ${done ? 'checked' : ''}" data-check="${t.id}" title="Đánh dấu hoàn thành"></button>
     </div>
     <div class="tc-title">
       <span class="trow-title edit-task" data-id="${t.id}">${esc(t.title)}</span>
-      ${hasKids ? `<span class="subprog" title="Nhiệm vụ con đã Đạt">${doneKids}/${kids.length}</span>` : ''}
+      ${hasKids ? `<span class="subprog" title="Nhiệm vụ con đã hoàn thành">${doneKids}/${kids.length}</span>` : ''}
       ${overdue ? `<span class="overdue-flag" title="Quá hạn">Quá hạn</span>` : ''}
-      <span class="trow-actions">${actions}</span>
     </div>
     <div class="tc-assignee">${avatarHtml(t.assignee_name)}</div>
     <div class="tc-due">${t.due_date ? `<span class="due-pill ${overdue ? 'overdue' : ''}">${esc(t.due_date.slice(5))}</span>` : '<span class="due-empty">+ Hạn</span>'}</div>
     <div class="tc-status"><select class="status-select st-change" style="color:${ST_COLOR[t.status]}" data-id="${t.id}">${stOpts}</select></div>
     <div class="tc-pri"><span class="pri-ind" style="color:${pri.c}">${pri.icon} ${esc(t.priority)}</span></div>
+    <div class="tc-act"><span class="trow-actions">${actions}</span></div>
   </div>`;
 }
 
@@ -434,13 +428,8 @@ function bindTaskEvents() {
     b.addEventListener('click', () => openTaskModal(null, +b.dataset.id)));
   document.querySelectorAll('.del-task').forEach((b) =>
     b.addEventListener('click', () => delTask(+b.dataset.id)));
-  // Nút ▲▼ (di chuyển trong cùng nhóm) — dùng cho điện thoại
-  document.querySelectorAll('.move-up').forEach((b) =>
-    b.addEventListener('click', () => moveArrow(+b.dataset.id, -1)));
-  document.querySelectorAll('.move-down').forEach((b) =>
-    b.addEventListener('click', () => moveArrow(+b.dataset.id, 1)));
 
-  // ---- Kéo-thả sắp xếp ----
+  // ---- Kéo-thả sắp xếp (việc cha & nhiệm vụ con) ----
   const clearDrop = () => document.querySelectorAll('.drop-before,.drop-after,.drop-target')
     .forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-target'));
 
@@ -456,8 +445,8 @@ function bindTaskEvents() {
       clearDrop(); dragId = null;
     });
   });
-  // Thả lên một dòng khác → chèn trước/sau; khác nhóm → đổi trạng thái theo nhóm đích
-  document.querySelectorAll('.trow:not(.thead):not(.sub)').forEach((row) => {
+  // Thả lên một dòng khác → chèn trước/sau (việc cha đổi nhóm = đổi trạng thái; task con xếp trong cùng cha)
+  document.querySelectorAll('.trow:not(.thead)').forEach((row) => {
     row.addEventListener('dragover', (e) => {
       if (dragId == null || +row.dataset.id === dragId) return;
       e.preventDefault();
@@ -513,20 +502,39 @@ async function performMove(dragId, targetId, pos) {
   const dragT = state.tasks.find((t) => t.id === dragId);
   const targT = state.tasks.find((t) => t.id === targetId);
   if (!dragT || !targT) return;
+  const dragParent = dragT.parent_id || 0;
+  const targParent = targT.parent_id || 0;
   try {
-    if (dragT.status !== targT.status) {
-      await api('task_status', { method: 'POST', body: { id: dragId, status: targT.status } });
-      dragT.status = targT.status;
+    if (dragParent === 0 && targParent === 0) {
+      // Việc cha: sắp xếp giữa các việc cha; kéo sang nhóm khác = đổi trạng thái
+      if (dragT.status !== targT.status) {
+        await api('task_status', { method: 'POST', body: { id: dragId, status: targT.status } });
+        dragT.status = targT.status;
+      }
+      let ids = topLevelInDisplayOrder().map((t) => t.id).filter((id) => id !== dragId);
+      let idx = ids.indexOf(targetId); if (idx < 0) idx = ids.length - 1;
+      ids.splice(pos === 'after' ? idx + 1 : idx, 0, dragId);
+      await saveOrder(ids);
+    } else if (dragParent !== 0 && dragParent === targParent) {
+      // Nhiệm vụ con: chỉ sắp xếp trong cùng việc cha
+      let sibs = state.tasks.filter((t) => t.parent_id === dragParent).sort((a, b) => a.sort_order - b.sort_order)
+        .map((t) => t.id).filter((id) => id !== dragId);
+      let idx = sibs.indexOf(targetId); if (idx < 0) idx = sibs.length - 1;
+      sibs.splice(pos === 'after' ? idx + 1 : idx, 0, dragId);
+      const childrenMap = {};
+      state.tasks.forEach((t) => { if (t.parent_id) (childrenMap[t.parent_id] ??= []).push(t.id); });
+      childrenMap[dragParent] = sibs; // thứ tự mới cho việc cha này
+      const ordered = [];
+      topLevelInDisplayOrder().forEach((t) => { ordered.push(t.id); (childrenMap[t.id] || []).forEach((c) => ordered.push(c)); });
+      await api('task_reorder', { method: 'POST', body: { project_id: state.currentProjectId, ordered_ids: ordered } });
+      await loadTasks(); loadProjects(); refreshReminderCount();
     }
-    let ids = topLevelInDisplayOrder().map((t) => t.id).filter((id) => id !== dragId);
-    let idx = ids.indexOf(targetId); if (idx < 0) idx = ids.length - 1;
-    ids.splice(pos === 'after' ? idx + 1 : idx, 0, dragId);
-    await saveOrder(ids);
+    // Kéo lẫn giữa cha/con hoặc khác cha: bỏ qua
   } catch (e) { toast(e.message, true); }
 }
 async function performMoveToGroup(dragId, status) {
   const dragT = state.tasks.find((t) => t.id === dragId);
-  if (!dragT) return;
+  if (!dragT || dragT.parent_id) return; // chỉ việc cha mới đổi nhóm/trạng thái
   try {
     if (dragT.status !== status) { await api('task_status', { method: 'POST', body: { id: dragId, status } }); dragT.status = status; }
     let ids = topLevelInDisplayOrder().map((t) => t.id).filter((id) => id !== dragId);
@@ -618,6 +626,7 @@ function openTaskModal(task, parentId = null) {
     <input id="t-remind" type="datetime-local" value="${task && task.remind_at ? esc(task.remind_at.replace(' ','T').slice(0,16)) : ''}">
     ${task ? `
     <div class="task-collab" id="task-collab">
+      <div class="tc-follow" id="tc-follow"></div>
       <div class="tc-tabs">
         <button type="button" class="tc-tab active" data-tab="comments">💬 Bình luận</button>
         <button type="button" class="tc-tab" data-tab="activity">📜 Hoạt động</button>
@@ -665,12 +674,26 @@ async function loadTaskFeed(taskId, projectId) {
   state._feed = { taskId, projectId };
   try {
     const d = await api('task_feed', { query: { task_id: taskId } });
+    renderFollow(d.followers || [], d.following);
     renderComments(d.comments, d.me);
     renderActivity(d.activity);
     renderTaskFiles(d.attachments);
     const ft = document.querySelector('#task-collab .tc-tab[data-tab="files"]');
     if (ft) ft.textContent = `📎 Tệp (${d.attachments.length})`;
   } catch (e) { toast(e.message, true); }
+}
+
+function renderFollow(followers, following) {
+  const el = $('tc-follow'); if (!el) return;
+  const avatars = followers.slice(0, 6).map((f) => avatarHtml(f.name)).join('');
+  el.innerHTML = `
+    <button class="btn tiny ${following ? 'primary' : ''}" id="follow-btn">${following ? '✓ Đang theo dõi' : '👁 Theo dõi'}</button>
+    <span class="follow-avatars">${avatars}</span>
+    <span class="muted" style="margin:0">${followers.length ? followers.length + ' người theo dõi' : 'Chưa có người theo dõi'}</span>`;
+  $('follow-btn').addEventListener('click', async () => {
+    try { await api('follow_toggle', { method: 'POST', body: { task_id: state._feed.taskId } }); loadTaskFeed(state._feed.taskId, state._feed.projectId); }
+    catch (e) { toast(e.message, true); }
+  });
 }
 
 function renderComments(comments, me) {

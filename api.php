@@ -65,6 +65,9 @@ function ensure_collab(): void
         id $pk, task_id INTEGER NOT NULL, user_id INTEGER, action TEXT NOT NULL, created_at VARCHAR(25) NOT NULL
     )$suffix");
     db()->exec("CREATE INDEX IF NOT EXISTS idx_activity_task ON activity (task_id)");
+    db()->exec("CREATE TABLE IF NOT EXISTS task_followers (
+        task_id INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (task_id, user_id)
+    )$suffix");
     $done = true;
 }
 
@@ -73,6 +76,25 @@ function log_activity(int $taskId, ?int $uid, string $action): void
     ensure_collab();
     db()->prepare('INSERT INTO activity (task_id, user_id, action, created_at) VALUES (?,?,?,?)')
         ->execute([$taskId, $uid, $action, date('Y-m-d H:i:s')]);
+}
+
+function user_name(?int $id): string
+{
+    if (!$id) return '';
+    static $cache = [];
+    if (!array_key_exists($id, $cache)) {
+        $s = db()->prepare('SELECT full_name FROM users WHERE id = ?');
+        $s->execute([$id]);
+        $cache[$id] = (string)($s->fetchColumn() ?: '');
+    }
+    return $cache[$id];
+}
+
+function fmt_size(int $b): string
+{
+    if ($b < 1024) return $b . ' B';
+    if ($b < 1048576) return round($b / 1024) . ' KB';
+    return round($b / 1048576, 1) . ' MB';
 }
 
 function uploads_dir(): string
@@ -346,7 +368,7 @@ try {
             ensure_task_columns();
             if ($id > 0) {
                 // Đảm bảo task thuộc đúng dự án người dùng có quyền.
-                $chk = db()->prepare('SELECT project_id, status, completed_at, assignee_id FROM tasks WHERE id=?');
+                $chk = db()->prepare('SELECT project_id, status, completed_at, assignee_id, description, priority, start_date, due_date FROM tasks WHERE id=?');
                 $chk->execute([$id]);
                 $cur = $chk->fetch();
                 if (!$cur || (int)$cur['project_id'] !== $pid) {
@@ -362,8 +384,15 @@ try {
                     'UPDATE tasks SET title=?, description=?, priority=?, status=?, assignee_id=?, start_date=?, due_date=?, remind_at=?, updated_at=?, completed_at=? WHERE id=?'
                 );
                 $stmt->execute([$title, $desc, $priority, $status, $assignee, $start, $due, $remind, $now(), $completed, $id]);
-                if ($cur['status'] !== $status) log_activity($id, (int)$u['id'], 'đổi trạng thái sang "' . $status . '"');
-                if ((int)($cur['assignee_id'] ?? 0) !== (int)($assignee ?? 0)) log_activity($id, (int)$u['id'], 'thay đổi người thực hiện');
+                $uid = (int)$u['id'];
+                if ($cur['status'] !== $status) log_activity($id, $uid, 'đổi trạng thái sang "' . $status . '"');
+                if ((int)($cur['assignee_id'] ?? 0) !== (int)($assignee ?? 0)) {
+                    log_activity($id, $uid, $assignee ? ('đổi người thực hiện: ' . user_name($assignee)) : 'bỏ người thực hiện');
+                }
+                if (($cur['priority'] ?? '') !== $priority) log_activity($id, $uid, 'đổi ưu tiên sang "' . $priority . '"');
+                if (trim((string)($cur['description'] ?? '')) !== $desc) log_activity($id, $uid, 'cập nhật mô tả');
+                if ((string)($cur['start_date'] ?? '') !== (string)($start ?? '')) log_activity($id, $uid, $start ? ('đặt ngày bắt đầu ' . substr($start, 0, 10)) : 'xóa ngày bắt đầu');
+                if ((string)($cur['due_date'] ?? '') !== (string)($due ?? '')) log_activity($id, $uid, $due ? ('đặt hạn chót ' . substr($due, 0, 10)) : 'xóa hạn chót');
             } else {
                 $ord = db()->prepare('SELECT COALESCE(MAX(sort_order),0)+1 FROM tasks WHERE project_id=?');
                 $ord->execute([$pid]);
@@ -376,6 +405,7 @@ try {
                 $stmt->execute([$pid, $parent, $title, $desc, $priority, $status, $assignee, $start, $due, $remind, $sort, $u['id'], $now(), $now(), $completed]);
                 $id = (int)db()->lastInsertId();
                 log_activity($id, (int)$u['id'], 'đã tạo công việc');
+                if ($assignee) log_activity($id, (int)$u['id'], 'thêm người thực hiện: ' . user_name($assignee));
             }
             json_out(['ok' => true, 'id' => $id]);
         }
@@ -426,6 +456,7 @@ try {
             db()->exec("DELETE FROM documents WHERE task_id IN ($inIds)");
             db()->exec("DELETE FROM comments WHERE task_id IN ($inIds)");
             db()->exec("DELETE FROM activity WHERE task_id IN ($inIds)");
+            db()->exec("DELETE FROM task_followers WHERE task_id IN ($inIds)");
             db()->prepare('DELETE FROM tasks WHERE parent_id=?')->execute([$id]); // xóa nhiệm vụ con
             db()->prepare('DELETE FROM tasks WHERE id=?')->execute([$id]);
             db()->commit();
@@ -555,6 +586,7 @@ try {
                  VALUES (?,?,?,?,?,?,?,?,?)'
             );
             $stmt->execute([$pid, 'file', $category, $orig, $stored, (int)$f['size'], $u['id'], $now(), $taskId]);
+            if ($taskId) log_activity($taskId, (int)$u['id'], 'đính kèm tệp "' . $orig . '" (' . fmt_size((int)$f['size']) . ')');
             json_out(['ok' => true, 'id' => (int)db()->lastInsertId()]);
         }
 
@@ -574,6 +606,7 @@ try {
                  VALUES (?,?,?,?,?,?,?,?)'
             );
             $stmt->execute([$pid, 'link', $category, $name, $url, $u['id'], $now(), $taskId]);
+            if ($taskId) log_activity($taskId, (int)$u['id'], 'thêm liên kết "' . $name . '"');
             json_out(['ok' => true, 'id' => (int)db()->lastInsertId()]);
         }
 
@@ -616,6 +649,7 @@ try {
                 $path = uploads_dir() . '/' . (int)$doc['project_id'] . '/' . basename((string)$doc['stored_name']);
                 if (is_file($path)) @unlink($path);
             }
+            if (!empty($doc['task_id'])) log_activity((int)$doc['task_id'], (int)$u['id'], ($doc['kind'] === 'file' ? 'xóa tệp "' : 'xóa liên kết "') . $doc['name'] . '"');
             db()->prepare('DELETE FROM documents WHERE id = ?')->execute([$id]);
             json_out(['ok' => true]);
         }
@@ -666,8 +700,37 @@ try {
             foreach ($atts as &$d) { $d['id'] = (int)$d['id']; $d['size'] = (int)$d['size']; }
             unset($d);
 
+            $fs = db()->prepare('SELECT us.id, us.full_name name FROM task_followers f LEFT JOIN users us ON us.id = f.user_id WHERE f.task_id = ?');
+            $fs->execute([$tid]);
+            $followers = $fs->fetchAll();
+            $following = false;
+            foreach ($followers as &$fr) { $fr['id'] = (int)$fr['id']; if ($fr['id'] === (int)$u['id']) $following = true; }
+            unset($fr);
+
             json_out(['ok' => true, 'comments' => $comments, 'activity' => $activity, 'attachments' => $atts,
+                'followers' => $followers, 'following' => $following,
                 'me' => ['id' => (int)$u['id'], 'role' => $u['role']]]);
+        }
+
+        case 'follow_toggle': {
+            $u = require_login();
+            ensure_collab();
+            $tid = (int)(body()['task_id'] ?? 0);
+            $chk = db()->prepare('SELECT project_id FROM tasks WHERE id=?');
+            $chk->execute([$tid]);
+            $pid = $chk->fetchColumn();
+            if ($pid === false || !can_access_project($u, (int)$pid)) json_error('Không có quyền.', 403);
+            $ex = db()->prepare('SELECT 1 FROM task_followers WHERE task_id=? AND user_id=?');
+            $ex->execute([$tid, $u['id']]);
+            if ($ex->fetchColumn()) {
+                db()->prepare('DELETE FROM task_followers WHERE task_id=? AND user_id=?')->execute([$tid, $u['id']]);
+                log_activity($tid, (int)$u['id'], 'bỏ theo dõi');
+                json_out(['ok' => true, 'following' => false]);
+            } else {
+                db()->prepare('INSERT INTO task_followers (task_id, user_id) VALUES (?,?)')->execute([$tid, $u['id']]);
+                log_activity($tid, (int)$u['id'], 'theo dõi công việc');
+                json_out(['ok' => true, 'following' => true]);
+            }
         }
 
         case 'comment_add': {

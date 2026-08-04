@@ -262,8 +262,8 @@ select { cursor: pointer; }
 #task-list { display: block; }
 .trow {
   display: grid;
-  grid-template-columns: 60px minmax(0,1fr) 138px 84px 150px 128px;
-  grid-template-areas: "check title assignee due status pri";
+  grid-template-columns: 52px minmax(0,1fr) 128px 76px 138px 112px 116px;
+  grid-template-areas: "check title assignee due status pri act";
   align-items: center; gap: 8px;
   padding: 8px 12px; border-bottom: 1px solid var(--border);
   transition: background .12s;
@@ -280,6 +280,7 @@ select { cursor: pointer; }
 .tc-due { grid-area: due; }
 .tc-status { grid-area: status; position: relative; }
 .tc-pri { grid-area: pri; }
+.tc-act { grid-area: act; display: flex; justify-content: flex-end; }
 
 .trow-title { font-weight: 550; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .trow-title:hover { color: var(--primary); }
@@ -302,9 +303,10 @@ select { cursor: pointer; }
 .subprog { font-size: 11px; font-weight: 700; color: var(--muted); background: var(--surface-3); padding: 1px 7px; border-radius: 20px; flex-shrink: 0; }
 .overdue-flag { font-size: 10px; font-weight: 700; color: var(--danger); background: var(--danger-soft); padding: 1px 7px; border-radius: 20px; flex-shrink: 0; }
 
-/* actions hiện khi hover */
-.trow-actions { display: inline-flex; gap: 1px; margin-left: auto; opacity: 0; transition: opacity .12s; flex-shrink: 0; }
+/* actions hiện khi hover, nằm trong cột "Hành động" bên phải */
+.trow-actions { display: inline-flex; align-items: center; gap: 1px; opacity: 0; transition: opacity .12s; flex-shrink: 0; }
 .trow:hover .trow-actions { opacity: 1; }
+.trow.thead .tc-act { justify-content: flex-end; }
 .ta-btn { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; padding: 3px 6px; border-radius: 6px; line-height: 1; }
 .ta-btn:hover { background: var(--surface-3); color: var(--text); }
 
@@ -507,6 +509,10 @@ select { cursor: pointer; }
 /* ============ Chi tiết task: bình luận / hoạt động / tệp ============ */
 .modal.wide { max-width: 680px; }
 .task-collab { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.tc-follow { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.follow-avatars { display: inline-flex; }
+.follow-avatars .avatar-mini { margin-left: -6px; border: 2px solid var(--surface); }
+.follow-avatars .avatar-mini:first-child { margin-left: 0; }
 .tc-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
 .tc-tab { border: 0; background: var(--surface-2); color: var(--muted); font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 9px; cursor: pointer; }
 .tc-tab:hover { color: var(--text); }
@@ -606,16 +612,18 @@ input[type="color"] { padding: 4px; height: 44px; cursor: pointer; }
 @media (max-width: 760px) {
   .trow.thead { display: none; }
   .trow {
-    grid-template-columns: 34px minmax(0,1fr) auto;
+    grid-template-columns: 32px minmax(0,1fr) auto auto;
     grid-template-areas:
-      "check title  pri"
-      "check status due";
+      "check title  title act"
+      "check status due   pri";
     row-gap: 7px; padding: 11px 8px 12px;
   }
   .tc-check { align-self: start; padding-top: 1px; }
   .tc-assignee { display: none; }
   .tc-due { justify-self: end; }
   .tc-pri { justify-self: end; }
+  .tc-act { justify-self: end; }
+  .tc-act .drag-grip { display: none; }   /* điện thoại không kéo-thả */
   .tc-status .status-select { border: 1px solid var(--border); background: var(--surface); }
   .trow-actions { opacity: 1; }
   .trow.sub .tc-check { padding-left: 16px; }
