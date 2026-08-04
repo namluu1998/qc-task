@@ -578,6 +578,7 @@ async function moveTask(id, dir) {
 
 /* ---------- Modal helpers ---------- */
 function openModal(title, bodyHtml, footHtml) {
+  $('modal').classList.remove('wide');
   $('modal').innerHTML = `
     <div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" id="modal-x">✕</button></div>
     <div class="modal-body">${bodyHtml}</div>
@@ -714,15 +715,12 @@ function renderActivity(activity) {
 
 function renderTaskFiles(atts) {
   const pane = $('tc-files'); if (!pane) return;
-  const list = atts.length ? atts.map((d) => {
-    const isFile = d.kind === 'file'; const href = isFile ? `api.php?action=doc_download&id=${d.id}` : d.url;
-    return `<div class="doc-item">
-      <span class="doc-ic">${isFile ? '📄' : '🔗'}</span>
-      <div class="doc-main"><a href="${esc(href)}" target="_blank" rel="noopener" class="doc-name">${esc(d.name)}</a>
-        <div class="doc-meta">${isFile ? fmtSize(d.size) : 'link'} · ${esc((d.created_at || '').slice(0, 10))}</div></div>
+  const list = atts.length ? atts.map((d) => `<div class="doc-item">
+      <span class="doc-ic">${docIcon(d)}</span>
+      <div class="doc-main">${docNameHtml(d)}
+        <div class="doc-meta">${d.kind === 'file' ? fmtSize(d.size) : 'link'} · ${esc((d.created_at || '').slice(0, 10))}</div></div>
       <button class="ta-btn tf-del" data-id="${d.id}" title="Xóa">🗑</button>
-    </div>`;
-  }).join('') : '<div class="muted">Chưa có tệp đính kèm.</div>';
+    </div>`).join('') : '<div class="muted">Chưa có tệp đính kèm.</div>';
   pane.innerHTML = `
     <div class="doc-upzone" id="tf-upzone"><input type="file" id="tf-file" hidden>
       <div class="doc-up-inner"><div class="doc-up-ic">⬆️</div>Kéo thả ảnh/file hoặc <span class="doc-pick" id="tf-pick">bấm để chọn</span><div class="muted" style="margin-top:4px">Tối đa 50MB</div></div></div>
@@ -736,6 +734,7 @@ function renderTaskFiles(atts) {
   up.addEventListener('drop', (e) => { e.preventDefault(); up.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) tfUpload(f); });
   $('tf-addlink').addEventListener('click', tfAddLink);
   pane.querySelectorAll('.tf-del').forEach((b) => b.addEventListener('click', () => tfDelete(+b.dataset.id)));
+  bindDocPreview(pane);
 }
 async function tfUpload(file) {
   if (file.size > 52428800) { toast('File vượt quá 50MB.', true); return; }
@@ -830,7 +829,7 @@ async function openReminders() {
   const wrap = $('reminder-list');
   wrap.innerHTML = d.reminders.map((r) => {
     const pri = PRI_STYLE[r.priority] || PRI_STYLE['Trung bình'];
-    return `<div class="task-card">
+    return `<div class="task-card clickable" data-id="${r.id}" data-proj="${r.project_id}">
       <div class="task-main">
         <div class="task-title">${esc(r.title)}</div>
         <div class="task-meta">
@@ -842,6 +841,8 @@ async function openReminders() {
         </div>
       </div></div>`;
   }).join('');
+  wrap.querySelectorAll('.task-card.clickable').forEach((el) =>
+    el.addEventListener('click', () => openCalTask(+el.dataset.id, +el.dataset.proj)));
   $('reminder-empty').classList.toggle('hidden', d.reminders.length > 0);
 }
 $('menu-reminders').addEventListener('click', openReminders);
@@ -974,14 +975,12 @@ async function renderDocs(pid) {
       return;
     }
     wrap.innerHTML = d.documents.map((doc) => {
-      const isFile = doc.kind === 'file';
-      const href = isFile ? `api.php?action=doc_download&id=${doc.id}` : doc.url;
-      const meta = [doc.uploader, doc.created_at ? doc.created_at.slice(0, 10) : '', isFile ? fmtSize(doc.size) : 'link']
+      const meta = [doc.uploader, doc.created_at ? doc.created_at.slice(0, 10) : '', doc.kind === 'file' ? fmtSize(doc.size) : 'link']
         .filter(Boolean).join(' · ');
       return `<div class="doc-item">
-        <span class="doc-ic">${isFile ? '📄' : '🔗'}</span>
+        <span class="doc-ic">${docIcon(doc)}</span>
         <div class="doc-main">
-          <a href="${esc(href)}" target="_blank" rel="noopener" class="doc-name">${esc(doc.name)}</a>
+          ${docNameHtml(doc)}
           <div class="doc-meta">${esc(meta)}</div>
         </div>
         <span class="doc-cat">${esc(doc.category)}</span>
@@ -990,6 +989,7 @@ async function renderDocs(pid) {
     }).join('');
     wrap.querySelectorAll('.doc-del').forEach((b) =>
       b.addEventListener('click', () => delDoc(pid, +b.dataset.id)));
+    bindDocPreview(wrap);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1095,28 +1095,36 @@ async function loadDocsCenter() {
     if (!d.documents.length) { list.innerHTML = '<div class="doc-empty">Không có tài liệu phù hợp.</div>'; return; }
     list.innerHTML = `<div class="muted" style="margin:2px 0 8px">${d.documents.length} tài liệu</div>` + d.documents.map(dcItem).join('');
     _docsById = {}; d.documents.forEach((x) => { _docsById[x.id] = x; });
-    list.querySelectorAll('.doc-preview').forEach((el) => el.addEventListener('click', () => previewDoc(+el.dataset.id)));
+    bindDocPreview(list);
     list.querySelectorAll('.doc-edit').forEach((b) => b.addEventListener('click', () => openDocEdit(_docsById[+b.dataset.id])));
     list.querySelectorAll('.doc-del').forEach((b) => b.addEventListener('click', () => dcDelete(+b.dataset.id)));
   } catch (e) { toast(e.message, true); }
 }
 let _docsById = {};
 const VIEWABLE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'];
-function isViewable(doc) {
-  return doc.kind === 'file' && VIEWABLE_EXT.includes((doc.name.split('.').pop() || '').toLowerCase());
+function isViewableFile(name) { return VIEWABLE_EXT.includes((String(name).split('.').pop() || '').toLowerCase()); }
+
+// Tên tài liệu: ảnh/PDF -> bấm xem trước; còn lại -> mở/tải
+function docNameHtml(doc) {
+  const isFile = doc.kind === 'file';
+  if (isFile && isViewableFile(doc.name)) {
+    return `<span class="doc-name doc-preview" data-id="${doc.id}" data-name="${esc(doc.name)}" title="Xem trước">${esc(doc.name)}</span>`;
+  }
+  const href = isFile ? `api.php?action=doc_download&id=${doc.id}` : doc.url;
+  return `<a href="${esc(href)}" target="_blank" rel="noopener" class="doc-name">${esc(doc.name)}</a>`;
+}
+function docIcon(doc) { return doc.kind === 'file' ? (isViewableFile(doc.name) ? '🖼️' : '📄') : '🔗'; }
+function bindDocPreview(container) {
+  container.querySelectorAll('.doc-preview').forEach((el) => el.addEventListener('click', () => previewDoc(+el.dataset.id, el.dataset.name)));
 }
 
 function dcItem(doc) {
   const isFile = doc.kind === 'file';
-  const viewable = isViewable(doc);
   const meta = [doc.uploader, doc.created_at ? doc.created_at.slice(0, 10) : '', isFile ? fmtSize(doc.size) : 'link'].filter(Boolean).join(' · ');
-  const nameEl = viewable
-    ? `<span class="doc-name doc-preview" data-id="${doc.id}" title="Xem trước">${esc(doc.name)}</span>`
-    : `<a href="${esc(isFile ? `api.php?action=doc_download&id=${doc.id}` : doc.url)}" target="_blank" rel="noopener" class="doc-name">${esc(doc.name)}</a>`;
   return `<div class="doc-item">
-    <span class="doc-ic">${isFile ? (viewable ? '🖼️' : '📄') : '🔗'}</span>
+    <span class="doc-ic">${docIcon(doc)}</span>
     <div class="doc-main">
-      ${nameEl}
+      ${docNameHtml(doc)}
       <div class="doc-meta"><span class="proj-badge" style="background:${esc(doc.project_color)}22;color:${esc(doc.project_color)}">${esc(doc.project_name)}</span> ${esc(meta)}</div>
     </div>
     <span class="doc-cat">${esc(doc.category)}</span>
@@ -1126,14 +1134,14 @@ function dcItem(doc) {
 }
 
 // Xem trước ảnh / PDF ngay trong app
-function previewDoc(id) {
-  const doc = _docsById[id]; if (!doc) return;
-  const ext = (doc.name.split('.').pop() || '').toLowerCase();
+function previewDoc(id, name) {
+  name = name || (_docsById[id] && _docsById[id].name) || 'Tài liệu';
+  const ext = (String(name).split('.').pop() || '').toLowerCase();
   const url = `api.php?action=doc_download&id=${id}&disp=inline`;
   const inner = ext === 'pdf'
     ? `<iframe src="${url}" class="doc-preview-frame"></iframe>`
-    : `<img src="${url}" class="doc-preview-img" alt="${esc(doc.name)}">`;
-  openModal(doc.name, `<div class="doc-preview-wrap">${inner}</div>`,
+    : `<img src="${url}" class="doc-preview-img" alt="${esc(name)}">`;
+  openModal(name, `<div class="doc-preview-wrap">${inner}</div>`,
     `<a class="btn" href="api.php?action=doc_download&id=${id}" download>⬇ Tải về</a><button class="btn ghost" id="pv-close">Đóng</button>`);
   $('modal').classList.add('wide');
   $('pv-close').addEventListener('click', closeModal);
