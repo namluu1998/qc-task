@@ -1043,8 +1043,36 @@ try {
             require_login();
             // Danh sách cơ bản để chọn người được giao việc.
             $rows = db()->query('SELECT id, username, full_name, role, active FROM users ORDER BY full_name')->fetchAll();
-            foreach ($rows as &$r) { $r['id'] = (int)$r['id']; $r['active'] = (int)$r['active']; }
+            // Đếm số việc đang mở của mỗi người (1 truy vấn)
+            $cq = db()->prepare("SELECT assignee_id, COUNT(*) c FROM tasks WHERE status <> ? AND assignee_id IS NOT NULL GROUP BY assignee_id");
+            $cq->execute([done_status()]);
+            $countMap = [];
+            foreach ($cq->fetchAll() as $cr) $countMap[(int)$cr['assignee_id']] = (int)$cr['c'];
+            foreach ($rows as &$r) { $r['id'] = (int)$r['id']; $r['active'] = (int)$r['active']; $r['open_tasks'] = $countMap[$r['id']] ?? 0; }
             json_out(['ok' => true, 'users' => $rows]);
+        }
+
+        // ------------------------------------------------ Hồ sơ cá nhân
+        case 'profile_save': {
+            $u = require_login();
+            $name = trim(body()['full_name'] ?? '');
+            if ($name === '') json_error('Họ tên không được để trống.');
+            db()->prepare('UPDATE users SET full_name=? WHERE id=?')->execute([$name, $u['id']]);
+            json_out(['ok' => true]);
+        }
+
+        case 'change_password': {
+            $u = require_login();
+            $b = body();
+            $cur = (string)($b['current_password'] ?? '');
+            $new = (string)($b['new_password'] ?? '');
+            if (strlen($new) < 6) json_error('Mật khẩu mới phải từ 6 ký tự trở lên.');
+            $s = db()->prepare('SELECT password_hash FROM users WHERE id=?');
+            $s->execute([$u['id']]);
+            $hash = $s->fetchColumn();
+            if (!$hash || !password_verify($cur, $hash)) json_error('Mật khẩu hiện tại không đúng.');
+            db()->prepare('UPDATE users SET password_hash=? WHERE id=?')->execute([password_hash($new, PASSWORD_DEFAULT), $u['id']]);
+            json_out(['ok' => true]);
         }
 
         case 'user_save': {

@@ -172,7 +172,8 @@ select { cursor: pointer; }
   border-radius: 9px; display: grid; place-items: center; font-size: 15px; box-shadow: 0 4px 10px rgba(37,99,235,.3);
 }
 .spacer { flex: 1; }
-.user-chip { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+.user-chip { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--text-2); cursor: pointer; padding: 4px 8px; border-radius: 8px; transition: background .12s; }
+.user-chip:hover { background: var(--surface-2); }
 .role-tag { background: var(--primary-soft); border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent); color: var(--primary); font-size: 11px; padding: 2px 9px; border-radius: 20px; font-weight: 700; }
 .bell { font-size: 18px; }
 .badge {
@@ -553,6 +554,7 @@ select { cursor: pointer; }
 .user-info { flex: 1; min-width: 0; }
 .user-info b { display: block; font-weight: 650; }
 .inactive-tag { color: var(--danger); font-size: 11px; font-weight: 700; }
+.user-workload { font-size: 12px; font-weight: 700; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); padding: 3px 10px; border-radius: 20px; white-space: nowrap; flex-shrink: 0; }
 
 /* ============ Modal ============ */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(16,24,40,.5); backdrop-filter: blur(3px); display: grid; place-items: center; z-index: 50; padding: 16px; animation: fade .16s ease; }

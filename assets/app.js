@@ -122,6 +122,47 @@ $('logout-btn').addEventListener('click', async () => {
   location.reload();
 });
 
+/* ---------- Hồ sơ cá nhân (đổi tên + đổi mật khẩu) ---------- */
+function openProfileModal() {
+  const u = state.user; if (!u) return;
+  openModal('👤 Hồ sơ của tôi', `
+    <div class="muted" style="margin:0 0 14px">@${esc(u.username)} · ${u.role === 'manager' ? 'Quản lý' : 'Nhân viên QC'}</div>
+    <label>Họ và tên</label>
+    <input id="pf-name" value="${esc(u.full_name || '')}">
+    <div style="border-top:1px solid var(--border); margin-top:18px; padding-top:14px">
+      <div class="rep-title" style="margin-bottom:10px">🔒 Đổi mật khẩu</div>
+      <label>Mật khẩu hiện tại</label>
+      <input id="pf-cur" type="password" autocomplete="current-password">
+      <div class="form-row">
+        <div><label>Mật khẩu mới</label><input id="pf-new" type="password" autocomplete="new-password"></div>
+        <div><label>Nhập lại</label><input id="pf-new2" type="password" autocomplete="new-password"></div>
+      </div>
+      <button class="btn" id="pf-changepw" style="margin-top:10px">Đổi mật khẩu</button>
+    </div>
+  `, `<button class="btn ghost" id="pf-cancel">Đóng</button><button class="btn primary" id="pf-save">Lưu tên</button>`);
+  $('pf-cancel').addEventListener('click', closeModal);
+  $('pf-save').addEventListener('click', async () => {
+    const name = $('pf-name').value.trim();
+    if (!name) { toast('Nhập họ tên.', true); return; }
+    try {
+      await api('profile_save', { method: 'POST', body: { full_name: name } });
+      state.user.full_name = name; $('user-name').textContent = name;
+      closeModal(); toast('Đã lưu hồ sơ.');
+    } catch (e) { toast(e.message, true); }
+  });
+  $('pf-changepw').addEventListener('click', async () => {
+    const cur = $('pf-cur').value, nw = $('pf-new').value, nw2 = $('pf-new2').value;
+    if (nw.length < 6) { toast('Mật khẩu mới tối thiểu 6 ký tự.', true); return; }
+    if (nw !== nw2) { toast('Mật khẩu nhập lại không khớp.', true); return; }
+    try {
+      await api('change_password', { method: 'POST', body: { current_password: cur, new_password: nw } });
+      $('pf-cur').value = ''; $('pf-new').value = ''; $('pf-new2').value = '';
+      toast('Đã đổi mật khẩu.');
+    } catch (e) { toast(e.message, true); }
+  });
+}
+document.querySelector('.user-chip').addEventListener('click', openProfileModal);
+
 /* ---------- Dự án ---------- */
 async function loadProjects() {
   const d = await api('projects');
@@ -1562,6 +1603,7 @@ async function openUsersView() {
         <b>${esc(u.full_name || u.username)} ${u.active ? '' : '<span class="inactive-tag">(khóa)</span>'}</b>
         <span class="muted" style="margin:0">@${esc(u.username)} · ${u.role === 'manager' ? 'Quản lý' : 'Nhân viên QC'}</span>
       </div>
+      <span class="user-workload" title="Việc đang mở được giao">${u.open_tasks || 0} việc</span>
       <button class="btn tiny edit-user" data-id="${u.id}">Sửa</button>
       ${u.id !== state.user.id ? `<button class="btn tiny danger del-user" data-id="${u.id}">Xóa</button>` : ''}
     </div>`).join('');
