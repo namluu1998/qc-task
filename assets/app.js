@@ -665,6 +665,7 @@ function openTaskModal(task, parentId = null) {
     </div>
     <label>Nhắc lúc</label>
     <input id="t-remind" type="datetime-local" value="${task && task.remind_at ? esc(task.remind_at.replace(' ','T').slice(0,16)) : ''}">
+    ${task && !task.parent_id ? '<div class="task-subs" id="task-subtasks"></div>' : ''}
     ${task ? `
     <div class="task-collab" id="task-collab">
       <div class="tc-follow" id="tc-follow"></div>
@@ -689,6 +690,7 @@ function openTaskModal(task, parentId = null) {
       ['comments', 'activity', 'files'].forEach((k) => $('tc-' + k).classList.toggle('hidden', k !== b.dataset.tab));
     }));
     loadTaskFeed(task.id, task.project_id != null ? task.project_id : state.currentProjectId);
+    if (!task.parent_id) renderSubtasksSection(task.id);
   }
   $('t-save').addEventListener('click', async () => {
     const title = $('t-title').value.trim();
@@ -709,6 +711,47 @@ function openTaskModal(task, parentId = null) {
   setTimeout(() => $('t-title').focus(), 50);
 }
 $('add-task-btn').addEventListener('click', () => openTaskModal(null));
+
+/* ---------- Nhiệm vụ con trong chi tiết task cha ---------- */
+function renderSubtasksSection(taskId) {
+  const el = $('task-subtasks'); if (!el) return;
+  const subs = state.tasks.filter((t) => t.parent_id === taskId).sort((a, b) => a.sort_order - b.sort_order);
+  const doneN = subs.filter((s) => s.status === DONE_STATUS).length;
+  const pct = subs.length ? Math.round(doneN / subs.length * 100) : 0;
+  el.innerHTML = `
+    <div class="subs-head">✅ Nhiệm vụ con <span class="subs-count">${doneN}/${subs.length}</span></div>
+    ${subs.length ? `<div class="prog subs-prog"><div class="prog-fill" style="width:${pct}%;background:var(--ok)"></div></div>` : ''}
+    <div class="subs-list">
+      ${subs.map((s) => `<div class="sub-item ${s.status === DONE_STATUS ? 'done' : ''}">
+        <button class="tcheck ${s.status === DONE_STATUS ? 'checked' : ''}" data-subcheck="${s.id}" title="Đánh dấu hoàn thành"></button>
+        <span class="sub-item-title" data-subopen="${s.id}">${esc(s.title)}</span>
+        <span class="sub-item-status" style="color:${STATUS_DOT[s.status] || 'var(--muted)'}">${esc(s.status)}</span>
+        ${avatarHtml(s.assignee_name)}
+      </div>`).join('') || '<div class="muted" style="padding:4px 0">Chưa có nhiệm vụ con.</div>'}
+    </div>
+    <div class="subs-add">
+      <input id="subs-new" class="input" placeholder="Thêm nhiệm vụ con…">
+      <button class="btn" id="subs-add-btn">＋ Thêm</button>
+    </div>`;
+  el.querySelectorAll('[data-subcheck]').forEach((b) => b.addEventListener('click', async () => {
+    const s = state.tasks.find((x) => x.id === +b.dataset.subcheck);
+    const next = s.status === DONE_STATUS ? FIRST_STATUS : DONE_STATUS;
+    try { await api('task_status', { method: 'POST', body: { id: s.id, status: next } }); await loadTasks(); renderSubtasksSection(taskId); loadProjects(); }
+    catch (e) { toast(e.message, true); }
+  }));
+  el.querySelectorAll('[data-subopen]').forEach((t) => t.addEventListener('click', () => {
+    const s = state.tasks.find((x) => x.id === +t.dataset.subopen); if (s) openTaskModal(s);
+  }));
+  const addSub = async () => {
+    const title = $('subs-new').value.trim(); if (!title) return;
+    try {
+      await api('task_save', { method: 'POST', body: { project_id: state.currentProjectId, parent_id: taskId, title, status: FIRST_STATUS, priority: 'Trung bình' } });
+      await loadTasks(); renderSubtasksSection(taskId); loadProjects(); toast('Đã thêm nhiệm vụ con.');
+    } catch (e) { toast(e.message, true); }
+  };
+  $('subs-add-btn').addEventListener('click', addSub);
+  $('subs-new').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addSub(); } });
+}
 
 /* ---------- Chi tiết task: bình luận + hoạt động + tệp ---------- */
 async function loadTaskFeed(taskId, projectId) {

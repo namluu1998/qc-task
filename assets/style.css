@@ -514,6 +514,21 @@ select { cursor: pointer; }
 .follow-avatars { display: inline-flex; }
 .follow-avatars .avatar-mini { margin-left: -6px; border: 2px solid var(--surface); }
 .follow-avatars .avatar-mini:first-child { margin-left: 0; }
+
+/* Nhiệm vụ con trong chi tiết task */
+.task-subs { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.subs-head { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+.subs-count { font-size: 12px; font-weight: 700; color: var(--muted); background: var(--surface-3); padding: 1px 8px; border-radius: 20px; margin-left: 4px; }
+.subs-prog { height: 8px; margin-bottom: 12px; }
+.subs-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.sub-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; }
+.sub-item:hover { background: var(--surface-2); }
+.sub-item-title { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 550; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-item-title:hover { color: var(--primary); }
+.sub-item.done .sub-item-title { text-decoration: line-through; color: var(--muted); }
+.sub-item-status { font-size: 11px; font-weight: 700; white-space: nowrap; }
+.subs-add { display: flex; gap: 8px; }
+.subs-add .input { flex: 1; }
 .tc-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
 .tc-tab { border: 0; background: var(--surface-2); color: var(--muted); font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 9px; cursor: pointer; }
 .tc-tab:hover { color: var(--text); }
