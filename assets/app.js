@@ -662,7 +662,7 @@ async function moveTask(id, dir) {
 
 /* ---------- Modal helpers ---------- */
 function openModal(title, bodyHtml, footHtml) {
-  $('modal').classList.remove('wide');
+  $('modal').classList.remove('wide', 'preview');
   $('modal').innerHTML = `
     <div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" id="modal-x">✕</button></div>
     <div class="modal-body">${bodyHtml}</div>
@@ -670,7 +670,7 @@ function openModal(title, bodyHtml, footHtml) {
   $('modal-backdrop').classList.remove('hidden');
   $('modal-x').addEventListener('click', closeModal);
 }
-function closeModal() { $('modal-backdrop').classList.add('hidden'); $('modal').innerHTML = ''; $('modal').classList.remove('wide'); }
+function closeModal() { $('modal-backdrop').classList.add('hidden'); $('modal').innerHTML = ''; $('modal').classList.remove('wide', 'preview'); }
 $('modal-backdrop').addEventListener('click', (e) => { if (e.target === $('modal-backdrop')) closeModal(); });
 
 /* ---------- Modal Công việc ---------- */
@@ -1286,7 +1286,7 @@ async function previewDoc(id, name) {
   const url = `api.php?action=doc_download&id=${id}&disp=inline`;
   openModal(name, `<div class="doc-preview-wrap" id="pv-body"><div class="muted" style="padding:20px">Đang tải…</div></div>`,
     `<a class="btn" href="api.php?action=doc_download&id=${id}" download>⬇ Tải về</a><button class="btn ghost" id="pv-close">Đóng</button>`);
-  $('modal').classList.add('wide');
+  $('modal').classList.add('preview');
   $('pv-close').addEventListener('click', closeModal);
   const body = $('pv-body'); if (!body) return;
   if (ext === 'pdf') {

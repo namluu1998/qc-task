@@ -519,6 +519,11 @@ select { cursor: pointer; }
 
 /* ============ Chi tiết task: bình luận / hoạt động / tệp ============ */
 .modal.wide { max-width: 680px; }
+.modal.preview { max-width: min(1180px, 95vw); }
+.modal.preview .modal-body { padding: 8px 14px 14px; }
+.modal.preview .doc-preview-frame { height: 84vh; }
+.modal.preview .doc-preview-img,
+.modal.preview .doc-preview-text { max-height: 84vh; }
 .task-collab { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
 .tc-follow { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .follow-avatars { display: inline-flex; }
