@@ -519,6 +519,17 @@ select { cursor: pointer; }
 
 /* ============ Chi tiết task: bình luận / hoạt động / tệp ============ */
 .modal.wide { max-width: 680px; }
+/* Modal Sửa công việc: rộng, chia 2 cột (thông tin | cộng tác) */
+.modal.task2 { max-width: min(1040px, 95vw); }
+.te-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 24px; align-items: start; }
+.te-side { border-left: 1px solid var(--border); padding-left: 24px; min-width: 0; }
+.te-main { min-width: 0; }
+.te-side > .task-subs:first-child,
+.te-side > .task-collab:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+@media (max-width: 760px) {
+  .te-grid { grid-template-columns: 1fr; gap: 2px; }
+  .te-side { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 10px; }
+}
 .modal.preview { max-width: min(1180px, 95vw); }
 .modal.preview .modal-body { padding: 8px 14px 14px; }
 .modal.preview .doc-preview-frame { height: 84vh; }

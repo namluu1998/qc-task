@@ -678,7 +678,7 @@ async function moveTask(id, dir) {
 
 /* ---------- Modal helpers ---------- */
 function openModal(title, bodyHtml, footHtml) {
-  $('modal').classList.remove('wide', 'preview');
+  $('modal').classList.remove('wide', 'preview', 'task2');
   $('modal').innerHTML = `
     <div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" id="modal-x">✕</button></div>
     <div class="modal-body">${bodyHtml}</div>
@@ -686,7 +686,7 @@ function openModal(title, bodyHtml, footHtml) {
   $('modal-backdrop').classList.remove('hidden');
   $('modal-x').addEventListener('click', closeModal);
 }
-function closeModal() { $('modal-backdrop').classList.add('hidden'); $('modal').innerHTML = ''; $('modal').classList.remove('wide', 'preview'); }
+function closeModal() { $('modal-backdrop').classList.add('hidden'); $('modal').innerHTML = ''; $('modal').classList.remove('wide', 'preview', 'task2'); }
 $('modal-backdrop').addEventListener('click', (e) => { if (e.target === $('modal-backdrop')) closeModal(); });
 
 /* ---------- Modal Công việc ---------- */
@@ -708,7 +708,7 @@ function openTaskModal(task, parentId = null) {
   const sevOpts = severities.map((s) => `<option ${curSev === s ? 'selected' : ''}>${esc(s)}</option>`).join('');
   const isBug = curType === 'Bug';
 
-  openModal(isEdit ? 'Sửa công việc' : (parentId ? 'Thêm nhiệm vụ con' : 'Thêm công việc'), `
+  const mainHtml = `
     <label>Tên công việc *</label>
     <input id="t-title" value="${task ? esc(task.title) : ''}">
     ${task && task.reopen_count > 0 ? `<div class="reopen-note">🔁 Đã mở lại (reopen) ${task.reopen_count} lần</div>` : ''}
@@ -741,9 +741,10 @@ function openTaskModal(task, parentId = null) {
       <div><label>Hạn chót</label><input id="t-due" type="date" value="${task && task.due_date ? esc(task.due_date.slice(0,10)) : ''}"></div>
     </div>
     <label>Nhắc lúc</label>
-    <input id="t-remind" type="datetime-local" value="${task && task.remind_at ? esc(task.remind_at.replace(' ','T').slice(0,16)) : ''}">
+    <input id="t-remind" type="datetime-local" value="${task && task.remind_at ? esc(task.remind_at.replace(' ','T').slice(0,16)) : ''}">`;
+
+  const sideHtml = `
     ${task && !task.parent_id ? '<div class="task-subs" id="task-subtasks"></div>' : ''}
-    ${task ? `
     <div class="task-collab" id="task-collab">
       <div class="tc-follow" id="tc-follow"></div>
       <div class="tc-tabs">
@@ -754,8 +755,14 @@ function openTaskModal(task, parentId = null) {
       <div class="tc-pane" id="tc-comments"><div class="muted">Đang tải…</div></div>
       <div class="tc-pane hidden" id="tc-activity"></div>
       <div class="tc-pane hidden" id="tc-files"></div>
-    </div>` : ''}
-  `, `
+    </div>`;
+
+  // Khi sửa: bố cục 2 cột (trái = thông tin, phải = nhiệm vụ con + cộng tác); khi thêm mới: 1 cột
+  const bodyHtml = task
+    ? `<div class="te-grid"><div class="te-main">${mainHtml}</div><div class="te-side">${sideHtml}</div></div>`
+    : mainHtml;
+
+  openModal(isEdit ? 'Sửa công việc' : (parentId ? 'Thêm nhiệm vụ con' : 'Thêm công việc'), bodyHtml, `
     <button class="btn ghost" id="t-cancel">Hủy</button>
     <button class="btn primary" id="t-save">Lưu</button>
   `);
@@ -766,7 +773,7 @@ function openTaskModal(task, parentId = null) {
     $('t-bug-fields').classList.toggle('hidden', !bug);
   });
   if (task) {
-    $('modal').classList.add('wide');
+    $('modal').classList.add('task2');
     document.querySelectorAll('#task-collab .tc-tab').forEach((b) => b.addEventListener('click', () => {
       document.querySelectorAll('#task-collab .tc-tab').forEach((x) => x.classList.toggle('active', x === b));
       ['comments', 'activity', 'files'].forEach((k) => $('tc-' + k).classList.toggle('hidden', k !== b.dataset.tab));
