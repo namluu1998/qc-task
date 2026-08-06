@@ -524,6 +524,18 @@ select { cursor: pointer; }
 .modal.preview .doc-preview-frame { height: 84vh; }
 .modal.preview .doc-preview-img,
 .modal.preview .doc-preview-text { max-height: 84vh; }
+.doc-preview-doc { white-space: pre-wrap; font-family: inherit; font-size: 14px; }
+
+.file-info-card { text-align: center; padding: 12px 6px 6px; }
+.file-info-card .fi-icon { font-size: 52px; line-height: 1; }
+.file-info-card .fi-title { font-weight: 600; font-size: 16px; margin: 10px 0 14px; word-break: break-word; }
+.fi-table { width: 100%; max-width: 420px; margin: 0 auto; border-collapse: collapse; text-align: left; }
+.fi-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 13.5px; vertical-align: top; }
+.fi-table td:first-child { color: var(--muted); white-space: nowrap; width: 40%; }
+.fi-warn { max-width: 420px; margin: 14px auto 0; padding: 10px 12px; border-radius: 8px; background: #f59e0b1a; border: 1px solid #f59e0b55; color: var(--text); font-size: 13px; text-align: left; }
+.fi-hash { max-width: 420px; margin: 14px auto 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.fi-sha-val { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; word-break: break-all; color: var(--muted); text-align: left; }
+.fi-note { max-width: 420px; margin: 14px auto 0; font-size: 12.5px; }
 .task-collab { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
 .tc-follow { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .follow-avatars { display: inline-flex; }

@@ -857,6 +857,7 @@ function renderActivity(activity) {
 
 function renderTaskFiles(atts) {
   const pane = $('tc-files'); if (!pane) return;
+  regDocs(atts);
   const list = atts.length ? atts.map((d) => `<div class="doc-item">
       <span class="doc-ic">${docIcon(d)}</span>
       <div class="doc-main">${docNameHtml(d)}
@@ -1112,6 +1113,7 @@ async function renderDocs(pid) {
     const d = await api('documents', { query: { project_id: pid } });
     const wrap = $('doc-list');
     if (!wrap) return;
+    regDocs(d.documents);
     if (!d.documents.length) {
       wrap.innerHTML = '<div class="doc-empty">Chưa có tài liệu. Tải file hoặc thêm link ở trên.</div>';
       return;
@@ -1236,7 +1238,7 @@ async function loadDocsCenter() {
     const d = await api('documents_all', { query });
     if (!d.documents.length) { list.innerHTML = '<div class="doc-empty">Không có tài liệu phù hợp.</div>'; return; }
     list.innerHTML = `<div class="muted" style="margin:2px 0 8px">${d.documents.length} tài liệu</div>` + d.documents.map(dcItem).join('');
-    _docsById = {}; d.documents.forEach((x) => { _docsById[x.id] = x; });
+    regDocs(d.documents);
     bindDocPreview(list);
     list.querySelectorAll('.doc-edit').forEach((b) => b.addEventListener('click', () => openDocEdit(_docsById[+b.dataset.id])));
     list.querySelectorAll('.doc-del').forEach((b) => b.addEventListener('click', () => dcDelete(+b.dataset.id)));
@@ -1245,21 +1247,46 @@ async function loadDocsCenter() {
 let _docsById = {};
 const VIEWABLE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'];
 const TEXT_EXT = ['txt', 'md', 'csv', 'log', 'json', 'xml'];
+function fileExt(name) { return (String(name).split('.').pop() || '').toLowerCase(); }
 function isViewableFile(name) {
-  const e = (String(name).split('.').pop() || '').toLowerCase();
+  const e = fileExt(name);
   return VIEWABLE_EXT.includes(e) || TEXT_EXT.includes(e);
 }
+// Ghi nhớ tài liệu để xem trước lấy được thông tin (dung lượng, người tải…)
+function regDocs(arr) { (arr || []).forEach((x) => { if (x && x.id != null) _docsById[x.id] = x; }); }
+function extIcon(name) {
+  const e = fileExt(name);
+  if (e === 'pdf') return '📕';
+  if (VIEWABLE_EXT.includes(e)) return '🖼️';
+  if (e === 'doc' || e === 'docx') return '📝';
+  if (e === 'xls' || e === 'xlsx') return '📊';
+  if (e === 'ppt' || e === 'pptx') return '📈';
+  if (e === 'zip' || e === 'rar' || e === '7z') return '🗜️';
+  if (e === 'exe' || e === 'msi') return '⚙️';
+  if (e === 'mp4' || e === 'mov') return '🎬';
+  if (TEXT_EXT.includes(e)) return '📄';
+  return '📄';
+}
+function fileTypeLabel(ext) {
+  const map = {
+    pdf: 'Tài liệu PDF', doc: 'Tài liệu Word', docx: 'Tài liệu Word',
+    xls: 'Bảng tính Excel', xlsx: 'Bảng tính Excel',
+    ppt: 'Trình chiếu PowerPoint', pptx: 'Trình chiếu PowerPoint',
+    zip: 'Tệp nén ZIP', rar: 'Tệp nén RAR', '7z': 'Tệp nén 7z',
+    exe: 'Tệp thực thi Windows (.exe)', msi: 'Bộ cài đặt Windows (.msi)',
+    mp4: 'Video MP4', mov: 'Video QuickTime',
+  };
+  return map[ext] || ('Tệp .' + ext);
+}
 
-// Tên tài liệu: ảnh/PDF -> bấm xem trước; còn lại -> mở/tải
+// Mọi tệp đều bấm để xem trước (xem xong mới tải). Link vẫn mở thẳng.
 function docNameHtml(doc) {
-  const isFile = doc.kind === 'file';
-  if (isFile && isViewableFile(doc.name)) {
+  if (doc.kind === 'file') {
     return `<span class="doc-name doc-preview" data-id="${doc.id}" data-name="${esc(doc.name)}" title="Xem trước">${esc(doc.name)}</span>`;
   }
-  const href = isFile ? `api.php?action=doc_download&id=${doc.id}` : doc.url;
-  return `<a href="${esc(href)}" target="_blank" rel="noopener" class="doc-name">${esc(doc.name)}</a>`;
+  return `<a href="${esc(doc.url)}" target="_blank" rel="noopener" class="doc-name">${esc(doc.name)}</a>`;
 }
-function docIcon(doc) { return doc.kind === 'file' ? (isViewableFile(doc.name) ? '🖼️' : '📄') : '🔗'; }
+function docIcon(doc) { return doc.kind === 'file' ? extIcon(doc.name) : '🔗'; }
 function bindDocPreview(container) {
   container.querySelectorAll('.doc-preview').forEach((el) => el.addEventListener('click', () => previewDoc(+el.dataset.id, el.dataset.name)));
 }
@@ -1279,27 +1306,135 @@ function dcItem(doc) {
   </div>`;
 }
 
-// Xem trước ảnh / PDF ngay trong app
+// Xem trước ngay trong app: ảnh/PDF/văn bản/Word; loại khác -> thẻ thông tin
 async function previewDoc(id, name) {
-  name = name || (_docsById[id] && _docsById[id].name) || 'Tài liệu';
-  const ext = (String(name).split('.').pop() || '').toLowerCase();
+  const doc = _docsById[id] || { id, name };
+  name = name || doc.name || 'Tài liệu';
+  const ext = fileExt(name);
   const url = `api.php?action=doc_download&id=${id}&disp=inline`;
   openModal(name, `<div class="doc-preview-wrap" id="pv-body"><div class="muted" style="padding:20px">Đang tải…</div></div>`,
     `<a class="btn" href="api.php?action=doc_download&id=${id}" download>⬇ Tải về</a><button class="btn ghost" id="pv-close">Đóng</button>`);
   $('modal').classList.add('preview');
   $('pv-close').addEventListener('click', closeModal);
   const body = $('pv-body'); if (!body) return;
-  if (ext === 'pdf') {
-    body.innerHTML = `<iframe src="${url}" class="doc-preview-frame"></iframe>`;
-  } else if (TEXT_EXT.includes(ext)) {
-    try {
+  const showInfo = () => { body.innerHTML = fileInfoCardHtml(doc, ext); $('modal').classList.remove('preview'); bindFileInfoCard(id); };
+  try {
+    if (ext === 'pdf') {
+      body.innerHTML = `<iframe src="${url}" class="doc-preview-frame"></iframe>`;
+    } else if (VIEWABLE_EXT.includes(ext)) {
+      body.innerHTML = `<img src="${url}" class="doc-preview-img" alt="${esc(name)}">`;
+    } else if (TEXT_EXT.includes(ext)) {
       const res = await fetch(url, { credentials: 'include' });
       const txt = await res.text();
       body.innerHTML = `<pre class="doc-preview-text">${esc(txt.slice(0, 100000))}</pre>`;
-    } catch (e) { body.innerHTML = '<div class="muted" style="padding:20px">Không tải được nội dung.</div>'; }
-  } else {
-    body.innerHTML = `<img src="${url}" class="doc-preview-img" alt="${esc(name)}">`;
+    } else if (ext === 'docx') {
+      const res = await fetch(`api.php?action=doc_download&id=${id}`, { credentials: 'include' });
+      const buf = await res.arrayBuffer();
+      let text = null;
+      try { text = await docxToText(buf); } catch (e) { text = null; }
+      if (text && text.trim()) body.innerHTML = `<pre class="doc-preview-text doc-preview-doc">${esc(text.slice(0, 100000))}</pre>`;
+      else showInfo();
+    } else {
+      showInfo();
+    }
+  } catch (e) {
+    body.innerHTML = '<div class="muted" style="padding:20px">Không tải được nội dung. Hãy bấm "Tải về".</div>';
   }
+}
+
+// Thẻ thông tin cho tệp không xem trước được (exe, doc cũ, zip, video…)
+function fileInfoCardHtml(doc, ext) {
+  const isExe = ext === 'exe' || ext === 'msi';
+  const rows = [
+    ['Loại tệp', fileTypeLabel(ext)],
+    doc.size != null ? ['Dung lượng', fmtSize(doc.size)] : null,
+    doc.uploader ? ['Người tải lên', doc.uploader] : null,
+    doc.created_at ? ['Ngày tải', String(doc.created_at).slice(0, 16)] : null,
+  ].filter(Boolean);
+  const canHash = typeof crypto !== 'undefined' && crypto.subtle;
+  return `<div class="file-info-card">
+    <div class="fi-icon">${extIcon(doc.name)}</div>
+    <div class="fi-title">${esc(doc.name)}</div>
+    <table class="fi-table"><tbody>${rows.map((r) => `<tr><td>${esc(r[0])}</td><td>${esc(String(r[1]))}</td></tr>`).join('')}</tbody></table>
+    ${isExe ? '<div class="fi-warn">⚠️ Đây là tệp thực thi. Chỉ mở/chạy nếu bạn tin tưởng nguồn gốc của tệp.</div>' : ''}
+    ${canHash ? `<div class="fi-hash"><button class="btn tiny" id="fi-sha">🔐 Tính mã kiểm tra (SHA-256)</button><code id="fi-sha-val" class="fi-sha-val"></code></div>` : ''}
+    <div class="muted fi-note">Không thể xem trước nội dung loại tệp này. Bấm “Tải về” để mở bằng ứng dụng phù hợp.</div>
+  </div>`;
+}
+function bindFileInfoCard(id) {
+  const btn = document.getElementById('fi-sha');
+  if (btn) btn.addEventListener('click', () => computeSha256(id, btn));
+}
+async function computeSha256(id, btn) {
+  const out = document.getElementById('fi-sha-val');
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Đang tính…';
+  try {
+    const res = await fetch(`api.php?action=doc_download&id=${id}`, { credentials: 'include' });
+    const buf = await res.arrayBuffer();
+    const hash = await crypto.subtle.digest('SHA-256', buf);
+    const hex = [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    if (out) out.textContent = hex;
+    btn.classList.add('hidden');
+  } catch (e) {
+    if (out) out.textContent = 'Lỗi khi tính mã.';
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+// Trích văn bản từ .docx (là tệp ZIP) hoàn toàn phía trình duyệt — không cần thư viện ngoài
+async function docxToText(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const dv = new DataView(arrayBuffer);
+  const n = bytes.length;
+  // Tìm End Of Central Directory (PK\x05\x06) quét từ cuối
+  let eocd = -1;
+  for (let i = n - 22; i >= Math.max(0, n - 22 - 65536); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('no-eocd');
+  const cdOffset = dv.getUint32(eocd + 16, true);
+  const cdCount = dv.getUint16(eocd + 10, true);
+  let p = cdOffset, target = null;
+  const dec = new TextDecoder();
+  for (let i = 0; i < cdCount; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true);
+    const compSize = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true);
+    const extraLen = dv.getUint16(p + 30, true);
+    const commentLen = dv.getUint16(p + 32, true);
+    const localOff = dv.getUint32(p + 42, true);
+    const nm = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+    if (nm === 'word/document.xml') { target = { method, compSize, localOff }; break; }
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  if (!target) throw new Error('no-document-xml');
+  const lo = target.localOff;
+  if (dv.getUint32(lo, true) !== 0x04034b50) throw new Error('bad-local-header');
+  const dataStart = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true);
+  const comp = bytes.subarray(dataStart, dataStart + target.compSize);
+  let xmlBytes;
+  if (target.method === 0) xmlBytes = comp;               // lưu thô
+  else if (target.method === 8) xmlBytes = await inflateRaw(comp); // nén deflate
+  else throw new Error('unsupported-method');
+  return xmlToPlainText(new TextDecoder('utf-8').decode(xmlBytes));
+}
+async function inflateRaw(bytes) {
+  if (typeof DecompressionStream === 'undefined') throw new Error('no-DecompressionStream');
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+function xmlToPlainText(xml) {
+  let s = xml
+    .replace(/<w:tab\b[^>]*\/?>/g, '\t')
+    .replace(/<w:br\b[^>]*\/?>/g, '\n')
+    .replace(/<w:cr\b[^>]*\/?>/g, '\n')
+    .replace(/<\/w:p>/g, '\n')
+    .replace(/<[^>]+>/g, '');
+  const ta = document.createElement('textarea');
+  ta.innerHTML = s;
+  s = ta.value;
+  return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // Sửa tên / phân loại tài liệu

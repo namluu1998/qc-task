@@ -23,7 +23,7 @@ if ($method === 'POST' && $action !== 'login') {
 $now = fn() => date('Y-m-d H:i:s');
 
 const UPLOAD_MAX = 52428800; // 50 MB
-const ALLOWED_EXT = ['pdf','doc','docx','xls','xlsx','ppt','pptx','csv','txt','md','png','jpg','jpeg','gif','webp','zip','rar','7z','mp4','mov','json','xml','log'];
+const ALLOWED_EXT = ['pdf','doc','docx','xls','xlsx','ppt','pptx','csv','txt','md','png','jpg','jpeg','gif','webp','zip','rar','7z','mp4','mov','json','xml','log','exe','msi'];
 
 /** Tạo bảng documents nếu chưa có (hoạt động cho cả cài mới lẫn cũ). */
 function ensure_docs(): void
