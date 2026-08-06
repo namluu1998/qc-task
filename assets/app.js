@@ -294,6 +294,20 @@ function renderKanban() {
   bindKanbanEvents();
 }
 
+const SEV_COLOR = { 'Blocker': '#b91c1c', 'Nghiêm trọng': '#e11d48', 'Trung bình': '#d97706', 'Nhẹ': '#64748b' };
+// Nhãn nhỏ trên thẻ: loại (Bug/Cải tiến), mức nghiêm trọng, số lần mở lại
+function taskBadges(t) {
+  let h = '';
+  if (t.type === 'Bug') {
+    h += `<span class="tbadge bug" title="Lỗi">🐞 Bug</span>`;
+    if (t.severity) h += `<span class="tbadge sev" style="--sev:${SEV_COLOR[t.severity] || '#64748b'}" title="Mức nghiêm trọng">${esc(t.severity)}</span>`;
+  } else if (t.type === 'Cải tiến') {
+    h += `<span class="tbadge imp" title="Cải tiến">✨ Cải tiến</span>`;
+  }
+  if (t.reopen_count > 0) h += `<span class="tbadge reopen" title="Đã mở lại ${t.reopen_count} lần">🔁 ${t.reopen_count}</span>`;
+  return h;
+}
+
 function kanbanCard(t, kids) {
   const done = t.status === DONE_STATUS;
   const pri = PRI_ICON[t.priority] || PRI_ICON['Trung bình'];
@@ -305,6 +319,7 @@ function kanbanCard(t, kids) {
       <span class="pri-ind" style="color:${pri.c}" title="${esc(t.priority)}">${pri.icon}</span>
       <span class="kcard-title">${esc(t.title)}</span>
     </div>
+    ${taskBadges(t) ? `<div class="kcard-badges">${taskBadges(t)}</div>` : ''}
     <div class="kcard-meta">
       ${avatarHtml(t.assignee_name, t.assignee_id, t.assignee_avatar)}
       ${kids.length ? `<span class="subprog">${doneKids}/${kids.length}</span>` : ''}
@@ -457,6 +472,7 @@ function taskRow(t, isSub, kids, manual) {
     </div>
     <div class="tc-title">
       <span class="trow-title edit-task" data-id="${t.id}">${esc(t.title)}</span>
+      ${taskBadges(t)}
       ${hasKids ? `<span class="subprog" title="Nhiệm vụ con đã hoàn thành">${doneKids}/${kids.length}</span>` : ''}
       ${overdue ? `<span class="overdue-flag" title="Quá hạn">Quá hạn</span>` : ''}
     </div>
@@ -682,18 +698,44 @@ function openTaskModal(task, parentId = null) {
     `<option ${task && task.status === s ? 'selected' : ''}>${esc(s)}</option>`).join('');
   const userOpts = '<option value="">— Chưa giao —</option>' + state.users.filter(u=>u.active).map((u) =>
     `<option value="${u.id}" ${task && task.assignee_id === u.id ? 'selected' : ''}>${esc(u.full_name || u.username)}</option>`).join('');
+  const revOpts = '<option value="">— Chưa chọn —</option>' + state.users.filter(u=>u.active).map((u) =>
+    `<option value="${u.id}" ${task && task.reviewer_id === u.id ? 'selected' : ''}>${esc(u.full_name || u.username)}</option>`).join('');
+  const types = state.meta.types || ['Task', 'Bug', 'Cải tiến'];
+  const severities = state.meta.severities || ['Blocker', 'Nghiêm trọng', 'Trung bình', 'Nhẹ'];
+  const curType = task ? (task.type || 'Task') : 'Task';
+  const typeOpts = types.map((t) => `<option ${curType === t ? 'selected' : ''}>${esc(t)}</option>`).join('');
+  const curSev = task && task.severity ? task.severity : 'Trung bình';
+  const sevOpts = severities.map((s) => `<option ${curSev === s ? 'selected' : ''}>${esc(s)}</option>`).join('');
+  const isBug = curType === 'Bug';
 
   openModal(isEdit ? 'Sửa công việc' : (parentId ? 'Thêm nhiệm vụ con' : 'Thêm công việc'), `
     <label>Tên công việc *</label>
     <input id="t-title" value="${task ? esc(task.title) : ''}">
+    ${task && task.reopen_count > 0 ? `<div class="reopen-note">🔁 Đã mở lại (reopen) ${task.reopen_count} lần</div>` : ''}
     <label>Mô tả</label>
     <textarea id="t-desc" rows="3">${task ? esc(task.description || '') : ''}</textarea>
+    <div class="form-row">
+      <div><label>Loại</label><select id="t-type">${typeOpts}</select></div>
+      <div id="t-sev-wrap" class="${isBug ? '' : 'hidden'}"><label>Mức nghiêm trọng</label><select id="t-sev">${sevOpts}</select></div>
+    </div>
     <div class="form-row">
       <div><label>Ưu tiên</label><select id="t-pri">${priOpts}</select></div>
       <div><label>Trạng thái</label><select id="t-status">${stOpts}</select></div>
     </div>
-    <label>Người thực hiện</label>
-    <select id="t-assignee">${userOpts}</select>
+    <div class="form-row">
+      <div><label>Người thực hiện</label><select id="t-assignee">${userOpts}</select></div>
+      <div><label>Người verify (QC)</label><select id="t-reviewer">${revOpts}</select></div>
+    </div>
+    <div id="t-bug-fields" class="bug-fields ${isBug ? '' : 'hidden'}">
+      <label>Môi trường (OS · trình duyệt · thiết bị)</label>
+      <input id="t-env" value="${task && task.environment ? esc(task.environment) : ''}" placeholder="VD: Windows 11 · Chrome 120 · Máy tính">
+      <label>Các bước tái hiện</label>
+      <textarea id="t-steps" rows="3" placeholder="1. …&#10;2. …&#10;3. …">${task && task.steps ? esc(task.steps) : ''}</textarea>
+      <div class="form-row">
+        <div><label>Kết quả mong đợi</label><textarea id="t-expected" rows="2">${task && task.expected ? esc(task.expected) : ''}</textarea></div>
+        <div><label>Kết quả thực tế</label><textarea id="t-actual" rows="2">${task && task.actual ? esc(task.actual) : ''}</textarea></div>
+      </div>
+    </div>
     <div class="form-row">
       <div><label>Ngày bắt đầu</label><input id="t-start" type="date" value="${task && task.start_date ? esc(task.start_date.slice(0,10)) : ''}"></div>
       <div><label>Hạn chót</label><input id="t-due" type="date" value="${task && task.due_date ? esc(task.due_date.slice(0,10)) : ''}"></div>
@@ -718,6 +760,11 @@ function openTaskModal(task, parentId = null) {
     <button class="btn primary" id="t-save">Lưu</button>
   `);
   $('t-cancel').addEventListener('click', closeModal);
+  $('t-type').addEventListener('change', () => {
+    const bug = $('t-type').value === 'Bug';
+    $('t-sev-wrap').classList.toggle('hidden', !bug);
+    $('t-bug-fields').classList.toggle('hidden', !bug);
+  });
   if (task) {
     $('modal').classList.add('wide');
     document.querySelectorAll('#task-collab .tc-tab').forEach((b) => b.addEventListener('click', () => {
@@ -738,6 +785,13 @@ function openTaskModal(task, parentId = null) {
       title, description: $('t-desc').value.trim(),
       priority: $('t-pri').value, status: $('t-status').value,
       assignee_id: $('t-assignee').value || null,
+      reviewer_id: $('t-reviewer').value || null,
+      type: $('t-type').value,
+      severity: $('t-type').value === 'Bug' ? $('t-sev').value : '',
+      environment: $('t-env') ? $('t-env').value.trim() : '',
+      steps: $('t-steps') ? $('t-steps').value.trim() : '',
+      expected: $('t-expected') ? $('t-expected').value.trim() : '',
+      actual: $('t-actual') ? $('t-actual').value.trim() : '',
       start_date: $('t-start').value || '', due_date: $('t-due').value || '', remind_at: remind,
     };
     try { await api('task_save', { method: 'POST', body }); closeModal(); await loadTasks(); loadProjects(); refreshReminderCount(); toast('Đã lưu.'); }

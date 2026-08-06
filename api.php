@@ -13,6 +13,8 @@ $action = $_GET['action'] ?? '';
 $method = $_SERVER['REQUEST_METHOD'];
 
 const PRIORITIES = ['Thấp', 'Trung bình', 'Cao', 'Khẩn cấp'];
+const TASK_TYPES = ['Task', 'Bug', 'Cải tiến'];
+const SEVERITIES = ['Blocker', 'Nghiêm trọng', 'Trung bình', 'Nhẹ'];
 const ROLES      = ['manager', 'qc'];
 
 // Mọi hành động POST (trừ login) bắt buộc có CSRF token hợp lệ.
@@ -157,6 +159,15 @@ function ensure_task_columns(): void
         db()->exec("UPDATE tasks SET completed_at = updated_at WHERE status = 'Đạt' AND (completed_at IS NULL OR completed_at = '')");
     }
     $add('start_date', 'VARCHAR(25) DEFAULT NULL');
+    // Miền QC: loại việc, độ nghiêm trọng, người verify, số lần mở lại, chi tiết lỗi
+    $add('type', "VARCHAR(20) NOT NULL DEFAULT 'Task'");
+    $add('severity', 'VARCHAR(20) DEFAULT NULL');
+    $add('reviewer_id', 'INTEGER DEFAULT NULL');
+    $add('reopen_count', 'INTEGER NOT NULL DEFAULT 0');
+    $add('steps', 'TEXT');
+    $add('expected', 'TEXT');
+    $add('actual', 'TEXT');
+    $add('environment', 'VARCHAR(255) DEFAULT NULL');
 }
 
 /** Bảng trạng thái (cấu hình được). Seed 5 trạng thái mặc định lần đầu. */
@@ -197,6 +208,12 @@ function done_status(): string
     foreach (status_defs() as $d) if ($d['is_done']) return $d['name'];
     $all = status_defs();
     return $all ? end($all)['name'] : 'Đạt';
+}
+/** Một trạng thái cụ thể có phải là "hoàn thành/đạt" hay không (cho phép nhiều trạng thái done). */
+function is_done_status(string $name): bool
+{
+    foreach (status_defs() as $d) if ($d['name'] === $name) return (bool)$d['is_done'];
+    return false;
 }
 
 try {
@@ -245,7 +262,7 @@ try {
                 'ok'   => true,
                 'user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'full_name' => $u['full_name'], 'role' => $u['role'], 'avatar' => $u['avatar'] ?? null],
                 'csrf' => csrf_token(),
-                'meta' => ['priorities' => PRIORITIES, 'statuses' => status_names(), 'statusDefs' => status_defs()],
+                'meta' => ['priorities' => PRIORITIES, 'types' => TASK_TYPES, 'severities' => SEVERITIES, 'statuses' => status_names(), 'statusDefs' => status_defs()],
             ]);
         }
 
@@ -344,10 +361,13 @@ try {
             if (!can_access_project($u, $pid)) {
                 json_error('Không có quyền truy cập dự án này.', 403);
             }
+            ensure_task_columns();
             $stmt = db()->prepare(
-                "SELECT t.*, a.full_name AS assignee_name, a.avatar AS assignee_avatar
+                "SELECT t.*, a.full_name AS assignee_name, a.avatar AS assignee_avatar,
+                        r.full_name AS reviewer_name, r.avatar AS reviewer_avatar
                  FROM tasks t
                  LEFT JOIN users a ON a.id = t.assignee_id
+                 LEFT JOIN users r ON r.id = t.reviewer_id
                  WHERE t.project_id = ?
                  ORDER BY t.sort_order ASC, t.id ASC"
             );
@@ -358,6 +378,8 @@ try {
                 $t['project_id']  = (int)$t['project_id'];
                 $t['parent_id']   = $t['parent_id'] !== null ? (int)$t['parent_id'] : null;
                 $t['assignee_id'] = $t['assignee_id'] !== null ? (int)$t['assignee_id'] : null;
+                $t['reviewer_id'] = $t['reviewer_id'] !== null ? (int)$t['reviewer_id'] : null;
+                $t['reopen_count'] = (int)($t['reopen_count'] ?? 0);
                 $t['sort_order']  = (int)$t['sort_order'];
             }
             json_out(['ok' => true, 'tasks' => $rows]);
@@ -385,11 +407,19 @@ try {
             $remind    = trim($b['remind_at'] ?? '') ?: null;
             $parent    = !empty($b['parent_id']) ? (int)$b['parent_id'] : null;
             $id        = (int)($b['id'] ?? 0);
+            // Miền QC
+            $type      = in_array($b['type'] ?? '', TASK_TYPES, true) ? $b['type'] : 'Task';
+            $severity  = ($type === 'Bug' && in_array($b['severity'] ?? '', SEVERITIES, true)) ? $b['severity'] : null;
+            $reviewer  = !empty($b['reviewer_id']) ? (int)$b['reviewer_id'] : null;
+            $steps     = trim($b['steps'] ?? '') ?: null;
+            $expected  = trim($b['expected'] ?? '') ?: null;
+            $actual    = trim($b['actual'] ?? '') ?: null;
+            $env       = trim($b['environment'] ?? '') ?: null;
 
             ensure_task_columns();
             if ($id > 0) {
                 // Đảm bảo task thuộc đúng dự án người dùng có quyền.
-                $chk = db()->prepare('SELECT project_id, status, completed_at, assignee_id, description, priority, start_date, due_date FROM tasks WHERE id=?');
+                $chk = db()->prepare('SELECT project_id, status, completed_at, assignee_id, description, priority, start_date, due_date, type, severity, reviewer_id, reopen_count FROM tasks WHERE id=?');
                 $chk->execute([$id]);
                 $cur = $chk->fetch();
                 if (!$cur || (int)$cur['project_id'] !== $pid) {
@@ -401,15 +431,24 @@ try {
                 } else {
                     $completed = null;
                 }
+                // Mở lại (reopen): từ trạng thái "đạt/đóng" quay về chưa xong -> tăng bộ đếm
+                $reopened = is_done_status((string)$cur['status']) && !is_done_status($status);
+                $reopenCount = (int)($cur['reopen_count'] ?? 0) + ($reopened ? 1 : 0);
                 $stmt = db()->prepare(
-                    'UPDATE tasks SET title=?, description=?, priority=?, status=?, assignee_id=?, start_date=?, due_date=?, remind_at=?, updated_at=?, completed_at=? WHERE id=?'
+                    'UPDATE tasks SET title=?, description=?, priority=?, status=?, assignee_id=?, start_date=?, due_date=?, remind_at=?, updated_at=?, completed_at=?, type=?, severity=?, reviewer_id=?, reopen_count=?, steps=?, expected=?, actual=?, environment=? WHERE id=?'
                 );
-                $stmt->execute([$title, $desc, $priority, $status, $assignee, $start, $due, $remind, $now(), $completed, $id]);
+                $stmt->execute([$title, $desc, $priority, $status, $assignee, $start, $due, $remind, $now(), $completed, $type, $severity, $reviewer, $reopenCount, $steps, $expected, $actual, $env, $id]);
                 $uid = (int)$u['id'];
                 if ($cur['status'] !== $status) log_activity($id, $uid, 'đổi trạng thái sang "' . $status . '"');
+                if ($reopened) log_activity($id, $uid, 'mở lại (reopen) — lần thứ ' . $reopenCount);
                 if ((int)($cur['assignee_id'] ?? 0) !== (int)($assignee ?? 0)) {
                     log_activity($id, $uid, $assignee ? ('đổi người thực hiện: ' . user_name($assignee)) : 'bỏ người thực hiện');
                 }
+                if ((int)($cur['reviewer_id'] ?? 0) !== (int)($reviewer ?? 0)) {
+                    log_activity($id, $uid, $reviewer ? ('đặt người verify: ' . user_name($reviewer)) : 'bỏ người verify');
+                }
+                if ((string)($cur['type'] ?? 'Task') !== $type) log_activity($id, $uid, 'đổi loại sang "' . $type . '"');
+                if ((string)($cur['severity'] ?? '') !== (string)($severity ?? '')) log_activity($id, $uid, $severity ? ('đặt mức nghiêm trọng "' . $severity . '"') : 'bỏ mức nghiêm trọng');
                 if (($cur['priority'] ?? '') !== $priority) log_activity($id, $uid, 'đổi ưu tiên sang "' . $priority . '"');
                 if (trim((string)($cur['description'] ?? '')) !== $desc) log_activity($id, $uid, 'cập nhật mô tả');
                 if ((string)($cur['start_date'] ?? '') !== (string)($start ?? '')) log_activity($id, $uid, $start ? ('đặt ngày bắt đầu ' . substr($start, 0, 10)) : 'xóa ngày bắt đầu');
@@ -420,13 +459,14 @@ try {
                 $sort = (int)$ord->fetchColumn();
                 $completed = $status === $doneName ? $now() : null;
                 $stmt = db()->prepare(
-                    'INSERT INTO tasks (project_id, parent_id, title, description, priority, status, assignee_id, start_date, due_date, remind_at, sort_order, created_by, created_at, updated_at, completed_at)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+                    'INSERT INTO tasks (project_id, parent_id, title, description, priority, status, assignee_id, start_date, due_date, remind_at, sort_order, created_by, created_at, updated_at, completed_at, type, severity, reviewer_id, steps, expected, actual, environment)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
                 );
-                $stmt->execute([$pid, $parent, $title, $desc, $priority, $status, $assignee, $start, $due, $remind, $sort, $u['id'], $now(), $now(), $completed]);
+                $stmt->execute([$pid, $parent, $title, $desc, $priority, $status, $assignee, $start, $due, $remind, $sort, $u['id'], $now(), $now(), $completed, $type, $severity, $reviewer, $steps, $expected, $actual, $env]);
                 $id = (int)db()->lastInsertId();
-                log_activity($id, (int)$u['id'], 'đã tạo công việc');
+                log_activity($id, (int)$u['id'], 'đã tạo ' . ($type === 'Bug' ? 'lỗi' : 'công việc'));
                 if ($assignee) log_activity($id, (int)$u['id'], 'thêm người thực hiện: ' . user_name($assignee));
+                if ($reviewer) log_activity($id, (int)$u['id'], 'đặt người verify: ' . user_name($reviewer));
             }
             json_out(['ok' => true, 'id' => $id]);
         }
@@ -440,17 +480,20 @@ try {
                 json_error('Trạng thái không hợp lệ.');
             }
             ensure_task_columns();
-            $chk = db()->prepare('SELECT project_id FROM tasks WHERE id=?');
+            $chk = db()->prepare('SELECT project_id, status, reopen_count FROM tasks WHERE id=?');
             $chk->execute([$id]);
-            $pid = $chk->fetchColumn();
-            if ($pid === false || !can_access_project($u, (int)$pid)) {
+            $cur = $chk->fetch();
+            if ($cur === false || !can_access_project($u, (int)$cur['project_id'])) {
                 json_error('Không có quyền.', 403);
             }
-            $completed = $status === done_status() ? $now() : null;   // ghi mốc hoàn thành / xóa khi mở lại
-            db()->prepare('UPDATE tasks SET status=?, updated_at=?, completed_at=? WHERE id=?')
-                ->execute([$status, $now(), $completed, $id]);
+            $completed = is_done_status($status) ? $now() : null;   // ghi mốc hoàn thành / xóa khi mở lại
+            $reopened = is_done_status((string)$cur['status']) && !is_done_status($status);
+            $reopenCount = (int)($cur['reopen_count'] ?? 0) + ($reopened ? 1 : 0);
+            db()->prepare('UPDATE tasks SET status=?, updated_at=?, completed_at=?, reopen_count=? WHERE id=?')
+                ->execute([$status, $now(), $completed, $reopenCount, $id]);
             log_activity($id, (int)$u['id'], 'đổi trạng thái sang "' . $status . '"');
-            json_out(['ok' => true]);
+            if ($reopened) log_activity($id, (int)$u['id'], 'mở lại (reopen) — lần thứ ' . $reopenCount);
+            json_out(['ok' => true, 'reopen_count' => $reopenCount]);
         }
 
         case 'task_delete': {
@@ -806,6 +849,7 @@ try {
             $col = $scope === 'created' ? 'created_by' : 'assignee_id';
             $stmt = db()->prepare(
                 "SELECT t.id, t.title, t.status, t.priority, t.parent_id, t.start_date, t.due_date, t.project_id,
+                        t.type, t.severity, t.reopen_count,
                         p.name project_name, p.color project_color, a.full_name assignee_name, a.avatar assignee_avatar
                  FROM tasks t JOIN projects p ON p.id = t.project_id LEFT JOIN users a ON a.id = t.assignee_id
                  WHERE t.project_id IN ($in) AND t.$col = ? ORDER BY t.id DESC"
