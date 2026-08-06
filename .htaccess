@@ -6,7 +6,7 @@
 </FilesMatch>
 
 # Chặn truy cập trực tiếp lib, data (SQLite) và uploads (file tải lên)
-RedirectMatch 403 ^/?(lib|data|uploads)(/.*)?$
+RedirectMatch 403 ^/?(lib|data|uploads|avatars)(/.*)?$
 
 # Không liệt kê thư mục
 Options -Indexes

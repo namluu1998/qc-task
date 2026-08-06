@@ -406,6 +406,16 @@ select { cursor: pointer; }
 .doc-preview-wrap { text-align: center; }
 .doc-preview-img { max-width: 100%; max-height: 72vh; border-radius: 8px; display: block; margin: 0 auto; }
 .doc-preview-frame { width: 100%; height: 72vh; border: 0; border-radius: 8px; }
+.doc-preview-text { max-height: 72vh; overflow: auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; text-align: left; margin: 0; }
+
+/* Ảnh đại diện thật */
+.avatar-img { object-fit: cover; }
+#user-avatar { display: inline-flex; }
+#user-avatar .avatar-mini, #user-avatar .avatar-img { width: 24px; height: 24px; font-size: 10px; }
+.pf-avatar-row { display: flex; align-items: center; gap: 16px; margin-bottom: 4px; }
+.pf-avatar { width: 72px; height: 72px; border-radius: 50%; overflow: hidden; flex-shrink: 0; }
+.pf-avatar .avatar-mini, .pf-avatar .avatar-img { width: 72px; height: 72px; font-size: 28px; }
+.pf-avatar-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .modal .doc-preview-wrap { min-width: 0; }
 
 /* ============ Segmented toggle (Danh sách / Kanban) ============ */

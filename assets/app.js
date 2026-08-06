@@ -83,6 +83,7 @@ function onLoggedIn(d) {
   $('login-screen').classList.add('hidden');
   $('app').classList.remove('hidden');
   $('user-name').textContent = d.user.full_name || d.user.username;
+  $('user-avatar').innerHTML = avatarHtml(d.user.full_name || d.user.username, d.user.id, d.user.avatar);
   $('user-role').textContent = d.user.role === 'manager' ? 'Quản lý' : 'QC';
   document.body.classList.toggle('is-manager', d.user.role === 'manager');
   document.querySelectorAll('.manager-only').forEach((el) =>
@@ -127,7 +128,17 @@ function openProfileModal() {
   const u = state.user; if (!u) return;
   openModal('👤 Hồ sơ của tôi', `
     <div class="muted" style="margin:0 0 14px">@${esc(u.username)} · ${u.role === 'manager' ? 'Quản lý' : 'Nhân viên QC'}</div>
-    <label>Họ và tên</label>
+    <label>Ảnh đại diện</label>
+    <div class="pf-avatar-row">
+      <div id="pf-avatar" class="pf-avatar">${avatarHtml(u.full_name || u.username, u.id, u.avatar)}</div>
+      <div class="pf-avatar-actions">
+        <input type="file" id="pf-avatar-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        <button class="btn tiny" id="pf-avatar-btn">✎ Đổi ảnh</button>
+        <button class="btn tiny danger ${u.avatar ? '' : 'hidden'}" id="pf-avatar-remove">Xóa ảnh</button>
+        <div class="muted" style="margin-top:5px">Ảnh vuông (1:1), tối đa 5MB.</div>
+      </div>
+    </div>
+    <label style="margin-top:14px">Họ và tên</label>
     <input id="pf-name" value="${esc(u.full_name || '')}">
     <div style="border-top:1px solid var(--border); margin-top:18px; padding-top:14px">
       <div class="rep-title" style="margin-bottom:10px">🔒 Đổi mật khẩu</div>
@@ -141,6 +152,27 @@ function openProfileModal() {
     </div>
   `, `<button class="btn ghost" id="pf-cancel">Đóng</button><button class="btn primary" id="pf-save">Lưu tên</button>`);
   $('pf-cancel').addEventListener('click', closeModal);
+  const refreshAvatar = () => {
+    const html = avatarHtml(state.user.full_name || state.user.username, state.user.id, state.user.avatar);
+    $('pf-avatar').innerHTML = html; $('user-avatar').innerHTML = html;
+    $('pf-avatar-remove').classList.toggle('hidden', !state.user.avatar);
+  };
+  $('pf-avatar-btn').addEventListener('click', () => $('pf-avatar-file').click());
+  $('pf-avatar-file').addEventListener('change', async () => {
+    const f = $('pf-avatar-file').files[0]; if (!f) return;
+    if (f.size > 5 * 1024 * 1024) { toast('Ảnh tối đa 5MB.', true); return; }
+    const fd = new FormData(); fd.append('file', f);
+    try {
+      const res = await fetch('api.php?action=avatar_upload', { method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': state.csrf }, body: fd });
+      const d = await res.json();
+      if (!res.ok || d.ok === false) throw new Error(d.error || 'Tải ảnh thất bại.');
+      state.user.avatar = d.avatar; refreshAvatar(); toast('Đã cập nhật ảnh.');
+    } catch (e) { toast(e.message, true); }
+  });
+  $('pf-avatar-remove').addEventListener('click', async () => {
+    try { await api('avatar_remove', { method: 'POST', body: {} }); state.user.avatar = null; refreshAvatar(); toast('Đã xóa ảnh.'); }
+    catch (e) { toast(e.message, true); }
+  });
   $('pf-save').addEventListener('click', async () => {
     const name = $('pf-name').value.trim();
     if (!name) { toast('Nhập họ tên.', true); return; }
@@ -274,7 +306,7 @@ function kanbanCard(t, kids) {
       <span class="kcard-title">${esc(t.title)}</span>
     </div>
     <div class="kcard-meta">
-      ${avatarHtml(t.assignee_name)}
+      ${avatarHtml(t.assignee_name, t.assignee_id, t.assignee_avatar)}
       ${kids.length ? `<span class="subprog">${doneKids}/${kids.length}</span>` : ''}
       ${t.due_date ? `<span class="due-pill ${overdue ? 'overdue' : ''}">📅 ${esc(t.due_date.slice(5))}</span>` : ''}
     </div>
@@ -319,7 +351,10 @@ const PRI_ICON = {
 let dragId = null;   // id việc đang kéo (kéo-thả sắp xếp)
 
 // Avatar chữ cái đầu, màu suy ra từ tên (ổn định).
-function avatarHtml(name) {
+function avatarHtml(name, uid, avatarFile) {
+  if (uid && avatarFile) {
+    return `<img class="avatar-mini avatar-img" src="api.php?action=avatar&id=${uid}&v=${encodeURIComponent(avatarFile)}" alt="${esc(name || '')}" title="${esc(name || '')}">`;
+  }
   if (!name) return `<span class="avatar-mini none" title="Chưa giao">?</span>`;
   const colors = ['#2563eb', '#7c3aed', '#0891b2', '#059669', '#d97706', '#dc2626', '#db2777', '#4f46e5'];
   let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
@@ -425,7 +460,7 @@ function taskRow(t, isSub, kids, manual) {
       ${hasKids ? `<span class="subprog" title="Nhiệm vụ con đã hoàn thành">${doneKids}/${kids.length}</span>` : ''}
       ${overdue ? `<span class="overdue-flag" title="Quá hạn">Quá hạn</span>` : ''}
     </div>
-    <div class="tc-assignee">${avatarHtml(t.assignee_name)}</div>
+    <div class="tc-assignee">${avatarHtml(t.assignee_name, t.assignee_id, t.assignee_avatar)}</div>
     <div class="tc-due">${t.due_date ? `<span class="due-pill ${overdue ? 'overdue' : ''}">${esc(t.due_date.slice(5))}</span>` : '<span class="due-empty">+ Hạn</span>'}</div>
     <div class="tc-status"><select class="status-select st-change" style="color:${ST_COLOR[t.status]}" data-id="${t.id}">${stOpts}</select></div>
     <div class="tc-pri"><span class="pri-ind" style="color:${pri.c}">${pri.icon} ${esc(t.priority)}</span></div>
@@ -726,7 +761,7 @@ function renderSubtasksSection(taskId) {
         <button class="tcheck ${s.status === DONE_STATUS ? 'checked' : ''}" data-subcheck="${s.id}" title="Đánh dấu hoàn thành"></button>
         <span class="sub-item-title" data-subopen="${s.id}">${esc(s.title)}</span>
         <span class="sub-item-status" style="color:${STATUS_DOT[s.status] || 'var(--muted)'}">${esc(s.status)}</span>
-        ${avatarHtml(s.assignee_name)}
+        ${avatarHtml(s.assignee_name, s.assignee_id, s.assignee_avatar)}
       </div>`).join('') || '<div class="muted" style="padding:4px 0">Chưa có nhiệm vụ con.</div>'}
     </div>
     <div class="subs-add">
@@ -769,7 +804,7 @@ async function loadTaskFeed(taskId, projectId) {
 
 function renderFollow(followers, following) {
   const el = $('tc-follow'); if (!el) return;
-  const avatars = followers.slice(0, 6).map((f) => avatarHtml(f.name)).join('');
+  const avatars = followers.slice(0, 6).map((f) => avatarHtml(f.name, f.id, f.avatar)).join('');
   el.innerHTML = `
     <button class="btn tiny ${following ? 'primary' : ''}" id="follow-btn">${following ? '✓ Đang theo dõi' : '👁 Theo dõi'}</button>
     <span class="follow-avatars">${avatars}</span>
@@ -783,7 +818,7 @@ function renderFollow(followers, following) {
 function renderComments(comments, me) {
   const pane = $('tc-comments'); if (!pane) return;
   const list = comments.length ? comments.map((c) => `
-    <div class="cmt">${avatarHtml(c.author)}
+    <div class="cmt">${avatarHtml(c.author, c.user_id, c.author_avatar)}
       <div class="cmt-main">
         <div class="cmt-head"><b>${esc(c.author || '—')}</b> <span class="muted" style="margin:0">${esc((c.created_at || '').slice(0, 16))}</span>
           ${(me.role === 'manager' || me.id === c.user_id) ? `<button class="cmt-del" data-id="${c.id}" title="Xóa">✕</button>` : ''}</div>
@@ -1209,7 +1244,11 @@ async function loadDocsCenter() {
 }
 let _docsById = {};
 const VIEWABLE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'];
-function isViewableFile(name) { return VIEWABLE_EXT.includes((String(name).split('.').pop() || '').toLowerCase()); }
+const TEXT_EXT = ['txt', 'md', 'csv', 'log', 'json', 'xml'];
+function isViewableFile(name) {
+  const e = (String(name).split('.').pop() || '').toLowerCase();
+  return VIEWABLE_EXT.includes(e) || TEXT_EXT.includes(e);
+}
 
 // Tên tài liệu: ảnh/PDF -> bấm xem trước; còn lại -> mở/tải
 function docNameHtml(doc) {
@@ -1241,17 +1280,26 @@ function dcItem(doc) {
 }
 
 // Xem trước ảnh / PDF ngay trong app
-function previewDoc(id, name) {
+async function previewDoc(id, name) {
   name = name || (_docsById[id] && _docsById[id].name) || 'Tài liệu';
   const ext = (String(name).split('.').pop() || '').toLowerCase();
   const url = `api.php?action=doc_download&id=${id}&disp=inline`;
-  const inner = ext === 'pdf'
-    ? `<iframe src="${url}" class="doc-preview-frame"></iframe>`
-    : `<img src="${url}" class="doc-preview-img" alt="${esc(name)}">`;
-  openModal(name, `<div class="doc-preview-wrap">${inner}</div>`,
+  openModal(name, `<div class="doc-preview-wrap" id="pv-body"><div class="muted" style="padding:20px">Đang tải…</div></div>`,
     `<a class="btn" href="api.php?action=doc_download&id=${id}" download>⬇ Tải về</a><button class="btn ghost" id="pv-close">Đóng</button>`);
   $('modal').classList.add('wide');
   $('pv-close').addEventListener('click', closeModal);
+  const body = $('pv-body'); if (!body) return;
+  if (ext === 'pdf') {
+    body.innerHTML = `<iframe src="${url}" class="doc-preview-frame"></iframe>`;
+  } else if (TEXT_EXT.includes(ext)) {
+    try {
+      const res = await fetch(url, { credentials: 'include' });
+      const txt = await res.text();
+      body.innerHTML = `<pre class="doc-preview-text">${esc(txt.slice(0, 100000))}</pre>`;
+    } catch (e) { body.innerHTML = '<div class="muted" style="padding:20px">Không tải được nội dung.</div>'; }
+  } else {
+    body.innerHTML = `<img src="${url}" class="doc-preview-img" alt="${esc(name)}">`;
+  }
 }
 
 // Sửa tên / phân loại tài liệu
@@ -1641,7 +1689,7 @@ async function openUsersView() {
   const wrap = $('user-list');
   wrap.innerHTML = state.users.map((u) => `
     <div class="user-row">
-      <div class="avatar">${esc((u.full_name || u.username).slice(0,1).toUpperCase())}</div>
+      ${u.avatar ? `<img class="avatar avatar-img" src="api.php?action=avatar&id=${u.id}&v=${encodeURIComponent(u.avatar)}" alt="">` : `<div class="avatar">${esc((u.full_name || u.username).slice(0,1).toUpperCase())}</div>`}
       <div class="user-info">
         <b>${esc(u.full_name || u.username)} ${u.active ? '' : '<span class="inactive-tag">(khóa)</span>'}</b>
         <span class="muted" style="margin:0">@${esc(u.username)} · ${u.role === 'manager' ? 'Quản lý' : 'Nhân viên QC'}</span>

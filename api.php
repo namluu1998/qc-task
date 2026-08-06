@@ -97,6 +97,26 @@ function fmt_size(int $b): string
     return round($b / 1048576, 1) . ' MB';
 }
 
+/** Thêm cột avatar cho users nếu chưa có. */
+function ensure_user_columns(): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try { db()->exec("ALTER TABLE users ADD COLUMN avatar VARCHAR(255) DEFAULT NULL"); } catch (Throwable $e) {}
+}
+
+function avatars_dir(): string
+{
+    $dir = __DIR__ . '/avatars';
+    if (!is_dir($dir)) mkdir($dir, 0775, true);
+    $ht = $dir . '/.htaccess';
+    if (!file_exists($ht)) {
+        @file_put_contents($ht, "Require all denied\nOrder deny,allow\nDeny from all\n<IfModule mod_php.c>\nphp_flag engine off\n</IfModule>\n");
+    }
+    return $dir;
+}
+
 function uploads_dir(): string
 {
     $dir = __DIR__ . '/uploads';
@@ -180,6 +200,7 @@ function done_status(): string
 }
 
 try {
+    ensure_user_columns();
     switch ($action) {
 
         // ------------------------------------------------ Xác thực
@@ -200,7 +221,7 @@ try {
             $_SESSION['uid'] = (int)$u['id'];
             json_out([
                 'ok'    => true,
-                'user'  => ['id' => (int)$u['id'], 'username' => $u['username'], 'full_name' => $u['full_name'], 'role' => $u['role']],
+                'user'  => ['id' => (int)$u['id'], 'username' => $u['username'], 'full_name' => $u['full_name'], 'role' => $u['role'], 'avatar' => $u['avatar'] ?? null],
                 'csrf'  => csrf_token(),
             ]);
         }
@@ -222,7 +243,7 @@ try {
             }
             json_out([
                 'ok'   => true,
-                'user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'full_name' => $u['full_name'], 'role' => $u['role']],
+                'user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'full_name' => $u['full_name'], 'role' => $u['role'], 'avatar' => $u['avatar'] ?? null],
                 'csrf' => csrf_token(),
                 'meta' => ['priorities' => PRIORITIES, 'statuses' => status_names(), 'statusDefs' => status_defs()],
             ]);
@@ -324,7 +345,7 @@ try {
                 json_error('Không có quyền truy cập dự án này.', 403);
             }
             $stmt = db()->prepare(
-                "SELECT t.*, a.full_name AS assignee_name
+                "SELECT t.*, a.full_name AS assignee_name, a.avatar AS assignee_avatar
                  FROM tasks t
                  LEFT JOIN users a ON a.id = t.assignee_id
                  WHERE t.project_id = ?
@@ -623,7 +644,11 @@ try {
             if (!is_file($path)) json_error('File không tồn tại trên máy chủ.', 404);
             // Xem trước inline chỉ cho ảnh + PDF (an toàn); còn lại luôn tải về
             $ext = strtolower(pathinfo((string)$doc['stored_name'], PATHINFO_EXTENSION));
-            $viewMime = ['png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp', 'pdf' => 'application/pdf'];
+            $viewMime = [
+                'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp', 'pdf' => 'application/pdf',
+                'txt' => 'text/plain; charset=utf-8', 'md' => 'text/plain; charset=utf-8', 'csv' => 'text/plain; charset=utf-8',
+                'log' => 'text/plain; charset=utf-8', 'json' => 'text/plain; charset=utf-8', 'xml' => 'text/plain; charset=utf-8',
+            ];
             $inline = (($_GET['disp'] ?? '') === 'inline') && isset($viewMime[$ext]);
             header('Content-Type: ' . ($inline ? $viewMime[$ext] : 'application/octet-stream'));
             header('Content-Disposition: ' . ($inline ? 'inline' : 'attachment') . '; filename="' . rawurlencode($doc['name']) . '"');
@@ -682,7 +707,7 @@ try {
             $pid = $chk->fetchColumn();
             if ($pid === false || !can_access_project($u, (int)$pid)) json_error('Không có quyền.', 403);
 
-            $cs = db()->prepare('SELECT c.id, c.body, c.created_at, c.user_id, us.full_name author
+            $cs = db()->prepare('SELECT c.id, c.body, c.created_at, c.user_id, us.full_name author, us.avatar author_avatar
                 FROM comments c LEFT JOIN users us ON us.id = c.user_id WHERE c.task_id = ? ORDER BY c.id ASC');
             $cs->execute([$tid]);
             $comments = $cs->fetchAll();
@@ -700,7 +725,7 @@ try {
             foreach ($atts as &$d) { $d['id'] = (int)$d['id']; $d['size'] = (int)$d['size']; }
             unset($d);
 
-            $fs = db()->prepare('SELECT us.id, us.full_name name FROM task_followers f LEFT JOIN users us ON us.id = f.user_id WHERE f.task_id = ?');
+            $fs = db()->prepare('SELECT us.id, us.full_name name, us.avatar FROM task_followers f LEFT JOIN users us ON us.id = f.user_id WHERE f.task_id = ?');
             $fs->execute([$tid]);
             $followers = $fs->fetchAll();
             $following = false;
@@ -781,7 +806,7 @@ try {
             $col = $scope === 'created' ? 'created_by' : 'assignee_id';
             $stmt = db()->prepare(
                 "SELECT t.id, t.title, t.status, t.priority, t.parent_id, t.start_date, t.due_date, t.project_id,
-                        p.name project_name, p.color project_color, a.full_name assignee_name
+                        p.name project_name, p.color project_color, a.full_name assignee_name, a.avatar assignee_avatar
                  FROM tasks t JOIN projects p ON p.id = t.project_id LEFT JOIN users a ON a.id = t.assignee_id
                  WHERE t.project_id IN ($in) AND t.$col = ? ORDER BY t.id DESC"
             );
@@ -1042,7 +1067,7 @@ try {
         case 'users': {
             require_login();
             // Danh sách cơ bản để chọn người được giao việc.
-            $rows = db()->query('SELECT id, username, full_name, role, active FROM users ORDER BY full_name')->fetchAll();
+            $rows = db()->query('SELECT id, username, full_name, role, active, avatar FROM users ORDER BY full_name')->fetchAll();
             // Đếm số việc đang mở của mỗi người (1 truy vấn)
             $cq = db()->prepare("SELECT assignee_id, COUNT(*) c FROM tasks WHERE status <> ? AND assignee_id IS NOT NULL GROUP BY assignee_id");
             $cq->execute([done_status()]);
@@ -1073,6 +1098,49 @@ try {
             if (!$hash || !password_verify($cur, $hash)) json_error('Mật khẩu hiện tại không đúng.');
             db()->prepare('UPDATE users SET password_hash=? WHERE id=?')->execute([password_hash($new, PASSWORD_DEFAULT), $u['id']]);
             json_out(['ok' => true]);
+        }
+
+        case 'avatar_upload': {
+            $u = require_login();
+            if (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) json_error('Tải ảnh thất bại.');
+            $f = $_FILES['file'];
+            if ($f['size'] <= 0 || $f['size'] > 5 * 1024 * 1024) json_error('Ảnh rỗng hoặc vượt quá 5MB.');
+            $ext = strtolower(pathinfo($f['name'], PATHINFO_EXTENSION));
+            if (!in_array($ext, ['png', 'jpg', 'jpeg', 'gif', 'webp'], true)) json_error('Chỉ nhận ảnh (png/jpg/gif/webp).');
+            $dir = avatars_dir();
+            $old = db()->prepare('SELECT avatar FROM users WHERE id=?'); $old->execute([$u['id']]);
+            $oldName = $old->fetchColumn();
+            if ($oldName && is_file($dir . '/' . basename((string)$oldName))) @unlink($dir . '/' . basename((string)$oldName));
+            $stored = 'u' . (int)$u['id'] . '_' . time() . '.' . $ext;
+            if (!move_uploaded_file($f['tmp_name'], $dir . '/' . $stored)) json_error('Không lưu được ảnh.', 500);
+            db()->prepare('UPDATE users SET avatar=? WHERE id=?')->execute([$stored, $u['id']]);
+            json_out(['ok' => true, 'avatar' => $stored]);
+        }
+
+        case 'avatar_remove': {
+            $u = require_login();
+            $old = db()->prepare('SELECT avatar FROM users WHERE id=?'); $old->execute([$u['id']]);
+            $oldName = $old->fetchColumn();
+            if ($oldName && is_file(avatars_dir() . '/' . basename((string)$oldName))) @unlink(avatars_dir() . '/' . basename((string)$oldName));
+            db()->prepare('UPDATE users SET avatar=NULL WHERE id=?')->execute([$u['id']]);
+            json_out(['ok' => true]);
+        }
+
+        case 'avatar': {
+            require_login();
+            $id = (int)($_GET['id'] ?? 0);
+            $s = db()->prepare('SELECT avatar FROM users WHERE id=?'); $s->execute([$id]);
+            $av = $s->fetchColumn();
+            if (!$av) json_error('Không có ảnh.', 404);
+            $path = avatars_dir() . '/' . basename((string)$av);
+            if (!is_file($path)) json_error('Ảnh không tồn tại.', 404);
+            $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            $mime = ['png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp'][$ext] ?? 'application/octet-stream';
+            header('Content-Type: ' . $mime);
+            header('Cache-Control: private, max-age=3600');
+            header('Content-Length: ' . filesize($path));
+            readfile($path);
+            exit;
         }
 
         case 'user_save': {

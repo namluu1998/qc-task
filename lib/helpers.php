@@ -70,7 +70,7 @@ function current_user(): ?array
     }
     static $u = null;
     if ($u === null) {
-        $stmt = db()->prepare('SELECT id, username, full_name, role, active FROM users WHERE id = ?');
+        $stmt = db()->prepare('SELECT id, username, full_name, role, active, avatar FROM users WHERE id = ?');
         $stmt->execute([$_SESSION['uid']]);
         $u = $stmt->fetch() ?: null;
     }
